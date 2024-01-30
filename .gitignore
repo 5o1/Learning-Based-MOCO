@@ -1,0 +1,11 @@
+**/__pycache__
+/.idea
+/test
+/data
+/fastMRI_prostate
+/.vscode
+/exp
+/notebook.ipynb
+/test.sh
+/weights
+/notebook
