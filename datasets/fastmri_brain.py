@@ -21,13 +21,13 @@ class Fastmri_brain(Dataset):
         super().__init__()
         self.path = path
         self.transforms = transforms
-        self.sample_list = glob(pathname=os.path.join(path, '*.h5'))
-        self.n_subset = n_subset if n_subset is not None else len(self.sample_list)
+        self._sample_list = glob(pathname=os.path.join(path, '*.h5'))
+        self.n_subset = n_subset if n_subset is not None else len(self._sample_list)
         self.debug = debug
         self.load_from_memory = load_from_memory
         self.n_jobs = n_jobs
 
-        self.sample_list = self.sample_list[:self.n_subset]
+        self._sample_list = self._sample_list[:self.n_subset]
 
         if self.load_from_memory:
             self.cache = {}
@@ -36,9 +36,9 @@ class Fastmri_brain(Dataset):
                 try:
                     sample = self.transforms(sample)
                 except ValueError as e:
-                    print(f"msg={repr(e)}, index={ijob}, file={self.sample_list[ijob]}")
+                    print(f"msg={repr(e)}, index={ijob}, file={self._sample_list[ijob]}")
                 self.cache[ijob] = sample
-            pqdm(enumerate(self.sample_list), job, n_jobs=self.n_jobs, desc = 'Data Preprocessing', argument_type='args')
+            pqdm(enumerate(self._sample_list), job, n_jobs=self.n_jobs, desc = 'Data Preprocessing', argument_type='args')
             self.cache = [self.cache[i] for i in range(len(self.cache))]
 
 
@@ -47,11 +47,11 @@ class Fastmri_brain(Dataset):
             sample = self.cache[index]
             return sample
         
-        file = h5py.File(self.sample_list[index], 'r')
+        file = h5py.File(self._sample_list[index], 'r')
         try:
             sample = self.transforms(file)
         except ValueError as e:
-            print(f"msg={repr(e)}, index={index}, file={self.sample_list[index]}")
+            print(f"msg={repr(e)}, index={index}, file={self._sample_list[index]}")
         return sample
     
 
@@ -63,11 +63,11 @@ class Fastmri_brain(Dataset):
                 samples.append(sample)
             return samples
         def job(index: int):
-            file = h5py.File(self.sample_list[index], 'r')
+            file = h5py.File(self._sample_list[index], 'r')
             try:
                 sample = self.transforms(file)
             except ValueError as e:
-                print(f"msg={repr(e)}, index={index}, file={self.sample_list[index]}")
+                print(f"msg={repr(e)}, index={index}, file={self._sample_list[index]}")
             return sample
         # with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
         #     for sample in executor.map(job, index_list):
@@ -79,18 +79,4 @@ class Fastmri_brain(Dataset):
     
 
     def __len__(self):
-        return len(self.sample_list)
-
-
-    @property
-    def args(self):
-        args = {
-            'self': self.__class__.__name__,
-            'path': self.path,
-            'nSample': self.n_subset,
-            'load_from_memory': self.load_from_memory,
-            'njobs':self.n_jobs,
-            'debug': self.debug,
-            'transforms' : vars(self.transforms)["transforms"]
-        }
-        return args
+        return len(self._sample_list)

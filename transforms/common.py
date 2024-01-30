@@ -25,11 +25,3 @@ class Transform:
                     res.append(self.do(x[key]))
                 res = type(x)(res)
                 return res
-
-    @property
-    def args(self):
-        args = {self.__class__.__name__:self.__dict__}
-        return args
-
-    def __repr__(self):
-        return str(self.args)

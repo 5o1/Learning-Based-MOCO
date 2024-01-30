@@ -66,9 +66,3 @@ class Unet(nn.Module):
         x = self.checknan(x, 'out')
         x = self.checkinf(x, 'out')
         return x
-    
-    @property
-    def args(self):
-        args = vars(self)
-        args = dict_filter(args)
-        return args

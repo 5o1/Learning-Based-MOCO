@@ -70,10 +70,3 @@ class Unet(nn.Module):
         # out
         x = self._out(x)
         return x
-
-
-    @property
-    def args(self):
-        args = self.__dict__
-        args = dict_filter(args)
-        return args
