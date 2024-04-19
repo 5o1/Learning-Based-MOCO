@@ -30,16 +30,17 @@ class Fastmri_brain(Dataset):
         self._sample_list = self._sample_list[:self.n_subset]
 
         if self.load_from_memory:
-            self.cache = {}
             def job(ijob : int, item : str):
                 sample = h5py.File(item, 'r')
                 try:
                     sample = self.transforms(sample)
-                except ValueError as e:
+                except Exception as e:
                     print(f"msg={repr(e)}, index={ijob}, file={self._sample_list[ijob]}")
-                self.cache[ijob] = sample
-            pqdm(enumerate(self._sample_list), job, n_jobs=self.n_jobs, desc = 'Data Preprocessing', argument_type='args')
-            self.cache = [self.cache[i] for i in range(len(self.cache))]
+                    raise e
+                return sample
+
+            self.cache = pqdm(enumerate(self._sample_list), job, n_jobs=self.n_jobs, desc = 'Data Preprocessing', argument_type='args')
+            print(f"Data Preprocessing Done!, cached {len(self.cache)} samples.")
 
 
     def __getitem__(self, index: int):
@@ -59,7 +60,13 @@ class Fastmri_brain(Dataset):
         samples = []
         if self.load_from_memory:
             for index in index_list:
-                sample = self.cache[index]
+                try:
+                    sample = self.cache[index]
+                except IndexError as e:
+                    print(f"msg={repr(e)}, index={index}, file={self._sample_list[index]}")
+                    print("total samples: ", len(self.cache))
+                    raise e
+
                 samples.append(sample)
             return samples
         def job(index: int):

@@ -22,16 +22,16 @@ class RandSlice(Transform):
 
 class CollectToList(Transform):
     """Turn dict into list in order of for_keys."""
-    def __init__(self, keys:List[str], for_keys = None):
+    def __init__(self, x_keys:List[str], y_keys = List[str], for_keys = None):
         super().__init__(for_keys=for_keys)
-        self.keys = keys
+        self.x_keys = x_keys
+        self.y_keys = y_keys
 
 
-    def do(self, x : dict):
-        res = []
-        for key in self.keys:
-            res.append(x[key])
-        return x
+    def do(self, input : dict):
+        x = {key:input[key] for key in self.x_keys}
+        y = {key:input[key] for key in self.y_keys}
+        return [x,y]
 
 class DoubleX(Transform):
     def __init__(self, deepcopy = True, for_keys = None):
@@ -45,3 +45,12 @@ class DoubleX(Transform):
         return x, x
     
 
+class Todevice(Transform):
+    def __init__(self, deepcopy = True, for_keys = None):
+        super().__init__(for_keys=for_keys)
+
+
+    def do(self, x : torch.Tensor):
+        if self.deepcopy:
+            return x, x.clone()
+        return x, x

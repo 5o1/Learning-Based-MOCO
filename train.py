@@ -13,6 +13,8 @@ import torchinfo
 
 from utils import DictFilter
 
+from typing import Callable
+
 LOG_LEVEL = logging.DEBUG
 LOG_CONSOLE_LEVEL = logging.DEBUG
 LOG_FILE_LEVEL = logging.INFO
@@ -26,13 +28,14 @@ best = None
 
 def train(
         exp_name : str, batch_size: int, epoch: int, learning_rate :float, save_to : str,
-        loss_fn: callable,
+        loss_fn: Callable,
         model : torch.nn.Module,
         train_dataset: Dataset,
         val_dataset: Dataset, 
         for_dump: dict = None,
         x_keys : list = [0],
         y_keys : list = [1],
+        metric_transform : Callable = lambda x : x
         ):
     """main train steps"""
     # configure logger
@@ -70,19 +73,32 @@ def train(
     # ignite configure
     trainer = create_supervised_trainer(model, optimizer, loss_fn, device)
 
+    def output_transform(output):
+        return metric_transform(output[0], output[1])
+
     val_metrics = {
-        "SSIM": SSIM(1.0, device=device),
-        "PSNR": PSNR(1.0, device=device),
+        "SSIM": SSIM(1.0, output_transform = output_transform, device=device),
+        "PSNR": PSNR(1.0, output_transform = output_transform, device=device),
         "loss": Loss(loss_fn, device=device)
     }
+
+    def to_device(data, device):
+        if isinstance(data, dict):
+            return {key: to_device(value, device) for key, value in data.items()}
+        elif isinstance(data, list):
+            return [to_device(item, device) for item in data]
+        elif torch.is_tensor(data):
+            return data.to(device)
+        else:
+            return data
 
     def get_data(batch: torch.Tensor | dict, keys: list | int | str):
         """get data from batch"""
         if isinstance(keys, (str, int)):
-            return batch[keys].to(device)
+            return batch[keys]
         if isinstance(keys, list):
             if len(keys) == 1 and isinstance(keys[0], (str, int)):
-                return batch[keys[0]].to(device)
+                return batch[keys[0]]
             if all(isinstance(key, int) for key in keys):
                 return [get_data(batch, key) for key in keys]
             if all(isinstance(key, str) for key in keys):
@@ -108,11 +124,12 @@ def train(
                 'device':device,
                 'save_to':save_to,
                 'loss_fn':loss_fn,
-                'model':model,
-                'train_dataset':train_dataset,
-                'val_dataset':val_dataset,
+                # 'model':model,
+                # 'train_dataset':train_dataset,
+                # 'val_dataset':val_dataset,
             }
         }
+        print(args)
         args = dictFilter(args)
         args_yaml = yaml.dump(args, default_flow_style= False, sort_keys= False)
         logger.debug(args_yaml)
@@ -127,7 +144,7 @@ def train(
     with open(NETWORKARCH_PATH, 'w') as f:
         summary = torchinfo.summary(
                 model = model,
-                input_data=get_data(next(iter(train_loader)), x_keys),
+                input_data=[get_data(next(iter(train_loader)), x_keys)],
                 depth=5,
                 device=device,
         )
@@ -155,35 +172,28 @@ def train(
         model.train()
         optimizer.zero_grad()
         x, y = get_data(batch, x_keys), get_data(batch, y_keys)
-        if isinstance(x, torch.Tensor):
-            y_pred = model(x)
-        elif isinstance(x, list):
-            y_pred = model(*x)
-        elif isinstance(x, dict):
-            y_pred = model(**x)
-        else:
-            logger.error(f'type(x)={type(x)} is not supported.')
-            raise NotImplementedError(f'type(x)={type(x)} is not supported.')
+        x = to_device(x, device)
+        y = to_device(y, device)
+
+        y_pred = model(x)
+
         loss = loss_fn(y_pred, y)
         loss.backward()
         optimizer.step()
         return loss.item()
+        # return y_pred, y
 
     trainer = Engine(train_step)
+    # metric = Loss(loss_fn=loss_fn, device=device)
+    # metric.attach(train_step, "Loss")
 
     def validation_step(engine, batch):
         model.eval()
         with torch.no_grad():
             x, y = get_data(batch, x_keys), get_data(batch, y_keys)
-            if isinstance(x, torch.Tensor):
-                y_pred = model(x)
-            elif isinstance(x, list):
-                y_pred = model(*x)
-            elif isinstance(x, dict):
-                y_pred = model(**x)
-            else:
-                logger.error(f'type(x)={type(x)} is not supported.')
-                raise NotImplementedError(f'type(x)={type(x)} is not supported.')
+            x = to_device(x, device)
+            y = to_device(y, device)
+            y_pred = model(x)
             return y_pred, y
 
     train_evaluator = Engine(validation_step)
@@ -232,7 +242,7 @@ def train(
         model_state_dict = model.state_dict()
         optimizer_state_dict = optimizer.state_dict()
         metrics = train_evaluator.state.metrics
-        path = os.path.join(OUTDIR,f'epoch{epoch}.checkpoint')
+        path = os.path.join(save_to,f'epoch{epoch}.checkpoint')
 
         savepoint = {
             'epoch': epoch,
@@ -243,14 +253,14 @@ def train(
 
         torch.save(savepoint, path)
         # update last
-        path = os.path.join(OUTDIR,f'last.model')
+        path = os.path.join(save_to,f'last.model')
         torch.save(savepoint, path)
         
         # update best
         global best
         if best == None or best['loss'] > metrics['loss']:
             best = savepoint
-            path = os.path.join(OUTDIR, f'best.model')
+            path = os.path.join(save_to, f'best.model')
             torch.save(best, path)
             
 
