@@ -36,11 +36,11 @@ if __name__ == '__main__':
         Ifft(),
         RandSlice(),
         SquareCrop(),
+        ViewAsReal_combine(),
         exp1(transforms = [
             RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3]),
             RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3])
         ]),
-        ViewAsReal_combine(for_keys=['x', 'Ii', 'y']),
         CollectToList(x_keys=['x'], y_keys=['y', 'Ii'])
     ])
 
