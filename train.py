@@ -44,6 +44,7 @@ def train(
         x_keys : list = [0],
         y_keys : list = [1],
         metric_transform : Callable = lambda x : x,
+        testshow_transform : Callable = lambda x : x,
         tensorboard_on : bool = True
         ):
     
@@ -333,6 +334,22 @@ def train(
         axs[i].set_title(f'{key}')
     
     fig.savefig(os.path.join(save_to, 'loss_curve.png'))
+
+    # Testcase
+    with torch.no_grad():
+        x, y = get_data(next(iter(val_loader)), x_keys), get_data(next(iter(val_loader)), y_keys)
+        x = to_device(x, device)
+        y = to_device(y, device)
+        y_pred = model(x)
+        y_pred = y_pred.cpu().numpy()
+        y = y.cpu().numpy()
+        y, y_pred = testshow_transform(y), testshow_transform(y_pred)
+        fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+        axs[0].imshow(y[0])
+        axs[0].set_title('Ground Truth')
+        axs[1].imshow(y_pred[0])
+        axs[1].set_title('Prediction')
+        fig.savefig(os.path.join(save_to, 'testcase.png'))
 
 
     # Training results and evaluations begin
