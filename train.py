@@ -325,7 +325,7 @@ def train(
 
     # loss curve
     fig, axs = plt.subplots(1, len(metrics), figsize=(5*len(metrics), 5))
-    for i, key, value in enumerate(metrics.items()):
+    for i, (key, value) in enumerate(metrics.items()):
         if key in train_history[0].keys():
             axs[i].plot([x[key] for x in train_history], label='train', color='darkorange')
         if key in val_history[0].keys():
