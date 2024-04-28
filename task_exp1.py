@@ -22,7 +22,7 @@ if __name__ == '__main__':
     # options
     options = TrainingParameters().options
 
-    outdir = os.path.join(options.basedir, options.outdir, options.name)
+    outdir = os.path.join(options.basedir, options.outdir, 'train', options.name)
     # if exists then append index to filename
     if os.path.exists(outdir):
         i = 1

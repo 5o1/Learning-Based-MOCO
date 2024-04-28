@@ -32,7 +32,7 @@ class exp1(Transform):
     def __init__(self, for_keys = None, transforms = None, masks = None):
         super().__init__(for_keys)
         self.transforms = transforms
-        self.masks = masks
+        self._masks = masks
 
     def do(self, x):
         # transform
@@ -45,19 +45,19 @@ class exp1(Transform):
         for i in Ii:
             Ki.append(torch.fft.fftn(torch.fft.fftshift(i)))
 
-        if self.masks is None:
+        if self._masks is None:
             Nmasks = len(Ki)
             Nlines = Ki[0].shape[0]
             Nshuffle = torch.randperm(Nlines)
-            self.masks = [torch.zeros_like(Ki[0]) for _ in range(len(Ki))]
+            self._masks = [torch.zeros_like(Ki[0]) for _ in range(len(Ki))]
             for i in range(Nmasks):
-                self.masks[i][Nshuffle[i * Nlines // Nmasks : (i + 1) * Nlines // Nmasks]] = 1
-            self.masks[-1][Nshuffle[Nmasks * Nlines // Nmasks :]] = 1
+                self._masks[i][Nshuffle[i * Nlines // Nmasks : (i + 1) * Nlines // Nmasks]] = 1
+            self._masks[-1][Nshuffle[Nmasks * Nlines // Nmasks :]] = 1
         
         # multiply Ki with masks[i] and sum 
         K = torch.zeros_like(Ki[0])
         for i in range(len(Ki)):
-            K += Ki[i] * self.masks[i]
+            K += Ki[i] * self._masks[i]
         
         # inverse fourier transform
         I = torch.fft.ifftshift(torch.fft.ifftn(K))
