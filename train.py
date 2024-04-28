@@ -306,11 +306,11 @@ def train(
         tb_logger.attach(trainer, log_handler=OutputHandler(tag="training", output_transform=lambda x: {'loss': x}), event_name=Events.EPOCH_COMPLETED)
         tb_logger.attach(val_evaluator, log_handler=OutputHandler(tag="validation", metric_names=list(metrics.keys()), global_step_transform=global_step_from_engine(trainer)), event_name=Events.EPOCH_COMPLETED)
 
-        import multiprocessing, subprocess
-        TB_PORT = 56006
-        tb_process = multiprocessing.Process(target=lambda tb_logs, port : subprocess.run(['tensorboard', '--logdir', tb_logs, '--port', str(port)]), args=(TB_LOGS_PATH, TB_PORT))
-        tb_process.daemon = True
-        tb_process.start()
+        # import multiprocessing, subprocess
+        # TB_PORT = 56006
+        # tb_process = multiprocessing.Process(target=lambda tb_logs, port : subprocess.run(['tensorboard', '--logdir', tb_logs, '--port', str(port)]), args=(TB_LOGS_PATH, TB_PORT))
+        # tb_process.daemon = True
+        # tb_process.start()
     # Tensor board logging end
     #########################
 
