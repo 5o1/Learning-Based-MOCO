@@ -2,7 +2,7 @@
 import os
 
 # project
-from models import Unet,Exp1_model 
+from models import Unet,Exp1_one_unet
 from models.nn import nConv2d
 from datasets import Fastmri_brain
 from transforms import *
@@ -41,7 +41,7 @@ if __name__ == '__main__':
             RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3]),
             RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3])
         ]),
-        CollectToList(x_keys=['x'], y_keys=['y', 'Ii'])
+        CollectToList(x_keys=['x'], y_keys=['y'])
     ])
 
     train_set = Fastmri_brain(
@@ -59,7 +59,7 @@ if __name__ == '__main__':
         load_from_memory=options.cache,n_jobs=options.ncpu
         )
 
-    model = Exp1_model(
+    model = Exp1_one_unet(
         in_channels=8,
         out_channels=8,
         depth = options.depth,
@@ -85,8 +85,8 @@ if __name__ == '__main__':
 
     def loss_fn(y_pred, y):
         loss = mse_func(y['y'], y_pred['y_hat'])
-        for i in range(len(y['Ii'])):
-            loss += mse_func(y['Ii'][i], y_pred['Ii_hat'][i])
+        # for i in range(len(y['Ii'])):
+        #     loss += mse_func(y['Ii'][i], y_pred['Ii_hat'][i])
         return loss              
     train(
         model = model,

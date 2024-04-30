@@ -43,8 +43,8 @@ def train(
         for_dump: dict = None,
         x_keys : list = [0],
         y_keys : list = [1],
-        metric_transform : Callable = lambda x : x,
-        testshow_transform : Callable = lambda x : x,
+        output_transform : Callable = lambda x : x,
+        display_transform : Callable = None,
         tensorboard_on : bool = True
         ):
     
@@ -87,7 +87,7 @@ def train(
     # Data Processing Utilities begin
     def output_transform(output):
         """Transform output to metric input."""
-        return metric_transform(output[0], output[1])
+        return output_transform(output[0], output[1])
     
     def to_device(data, device):
         """Recursively move data to device."""
@@ -236,7 +236,7 @@ def train(
         metrics = train_evaluator.state.metrics
         # logger.info(f"Training Results - Epoch[{trainer.state.epoch}/{epoch}] SSIM: {metrics['SSIM']} PSNR:{metrics['PSNR']} Avg loss: {metrics['loss']}")
         logger.info(f"Training Results - Epoch[{trainer.state.epoch}/{epoch}] Avg loss: {metrics['loss']}")
-        train_history.append(metrics)
+        train_history.append(metrics.items())
 
 
     @trainer.on(Events.EPOCH_COMPLETED)
@@ -245,7 +245,7 @@ def train(
         val_evaluator.run(val_loader)
         metrics = val_evaluator.state.metrics
         logger.info(f"Validation Results - Epoch[{trainer.state.epoch}/{epoch}] SSIM: {metrics['SSIM']} PSNR:{metrics['PSNR']} Avg loss: {metrics['loss']}")
-        val_history.append(metrics)
+        val_history.append(metrics.items())
 
     # to_save = {'model': model, 'optimizer': optimizer, 'trainer': trainer}
     # checkpoint_dir = "checkpoints/"
@@ -341,9 +341,11 @@ def train(
         x = to_device(x, device)
         y = to_device(y, device)
         y_pred = model(x)
+        if display_transform is None:
+            display_transform = output_transform
+        y_pred, y = display_transform(y_pred, y)
         y_pred = y_pred.cpu().numpy()
         y = y.cpu().numpy()
-        y, y_pred = testshow_transform(y), testshow_transform(y_pred)
         fig, axs = plt.subplots(1, 2, figsize=(10, 5))
         axs[0].imshow(y[0])
         axs[0].set_title('Ground Truth')
