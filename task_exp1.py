@@ -3,7 +3,7 @@ import os
 
 # project
 from models import Unet,Exp1_model 
-from models.nn import nConv2d
+from models.mynn import nConv2d
 from datasets import Fastmri_brain
 from transforms import *
 from configs import TrainingParameters
@@ -36,7 +36,7 @@ if __name__ == '__main__':
         Ifft(),
         RandSlice(),
         SquareCrop(),
-        ViewAsReal_combine(),
+        Complex2Real(),
         exp1(transforms = [
             RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3]),
             RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3])

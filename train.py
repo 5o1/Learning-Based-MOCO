@@ -17,7 +17,6 @@ from ignite.handlers import Checkpoint, global_step_from_engine
 
 import torch
 from torch.utils.data import DataLoader, Dataset
-import torchinfo
 
 from utils import Profile, DictFilter
 
@@ -147,16 +146,23 @@ def train(
     args_profile.dump(save_to=ARGS_PATH)
     logger.debug(args_profile.get())
 
-    # Save model.torchinfo to file
-    NETWORKARCH_PATH = os.path.join(save_to, 'model_architecture.yaml')
-    summary_profile = Profile(profile=str(torchinfo.summary(
-            model = model,
-            input_data=[get_data(next(iter(train_loader)), x_keys)],
-            depth=5,
-            device=device,
-    )))
-    summary_profile.dump(save_to=NETWORKARCH_PATH)
-    logger.debug(summary_profile.get())
+    # If torchinfo is installed, save model.torchinfo to file
+    try:
+        import torchinfo
+    except ImportError:
+        logger.warning('torchinfo is not installed. Please install torchinfo to get model summary.')
+        torchinfo = None
+    else:
+        # Save model.torchinfo to file
+        NETWORKARCH_PATH = os.path.join(save_to, 'model_architecture.yaml')
+        summary_profile = Profile(profile=str(torchinfo.summary(
+                model = model,
+                input_data=[get_data(next(iter(train_loader)), x_keys)],
+                depth=5,
+                device=device,
+        )))
+        summary_profile.dump(save_to=NETWORKARCH_PATH)
+        logger.debug(summary_profile.get())
 
     # Save for_dump[keys] to file
     if for_dump is not None:
@@ -305,12 +311,7 @@ def train(
         # tb_logger.attach(trainer, log_handler=WeightsHistHandler(model), event_name=Events.EPOCH_COMPLETED)
         tb_logger.attach(trainer, log_handler=OutputHandler(tag="training", output_transform=lambda x: {'loss': x}), event_name=Events.EPOCH_COMPLETED)
         tb_logger.attach(val_evaluator, log_handler=OutputHandler(tag="validation", metric_names=list(metrics.keys()), global_step_transform=global_step_from_engine(trainer)), event_name=Events.EPOCH_COMPLETED)
-
-        # import multiprocessing, subprocess
-        # TB_PORT = 56006
-        # tb_process = multiprocessing.Process(target=lambda tb_logs, port : subprocess.run(['tensorboard', '--logdir', tb_logs, '--port', str(port)]), args=(TB_LOGS_PATH, TB_PORT))
-        # tb_process.daemon = True
-        # tb_process.start()
+        
     # Tensor board logging end
     #########################
 

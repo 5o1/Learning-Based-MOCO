@@ -59,7 +59,7 @@ def makecase(input_path : str, name = 'exp1', outdir = './exp/'):
         RandSlice(),
         SquareCrop(),
         FSE_readout(ETL=8, probability=0.25,movefunc=RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3])),
-        ViewAsReal_combine(),
+        Complex2Real(),
     ])
 
 

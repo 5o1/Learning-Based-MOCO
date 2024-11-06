@@ -3,7 +3,7 @@ import os
 
 # project
 from models import Unet
-from models.nn import nConv2d
+from models.mynn import nConv2d
 from datasets import Fastmri_brain
 from transforms import *
 from configs import TrainingParameters
@@ -25,7 +25,7 @@ if __name__ == '__main__':
         RandSlice(),
         SquareCrop(),
         FSE_readout(ETL=8, probability=0.25,movefunc=RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3])),
-        ViewAsReal_combine(),
+        Complex2Real(),
     ])
 
     train_set = Fastmri_brain(

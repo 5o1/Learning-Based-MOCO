@@ -2,7 +2,7 @@
 
 from matplotlib import pyplot as plt
 import numpy as np
-from IPython.display import display, clear_output
+# from IPython.display import display, clear_output
 from matplotlib.colors import CSS4_COLORS,to_rgba
 from random import shuffle
 import re
@@ -96,30 +96,30 @@ def plot_inone(Y: np.ndarray | list, titles = None, view = None):
     plt.legend()
 
 
-class Display:
-    def __init__(self, image0, title,view= lambda x: Display.norm(np.abs(x))) -> None:
-        self.fig, self.ax = plt.subplots()
-        self.view = view
-        image0 = self.view(image0)
-        self.array = self.ax.imshow(image0, cmap='gray')
-        self.title_format = title
-        self.ax.set_title(title)
-        self.ax.set_axis_off()  # Set axis off through the axis object
+# class Display:
+#     def __init__(self, image0, title,view= lambda x: Display.norm(np.abs(x))) -> None:
+#         self.fig, self.ax = plt.subplots()
+#         self.view = view
+#         image0 = self.view(image0)
+#         self.array = self.ax.imshow(image0, cmap='gray')
+#         self.title_format = title
+#         self.ax.set_title(title)
+#         self.ax.set_axis_off()  # Set axis off through the axis object
 
 
-    def __call__(self, image, title):
-        image = self.view(image)
-        self.array.set_array(image)
-        self.ax.set_title(title)
-        display(self.fig)
-        clear_output(wait=True)
+#     def __call__(self, image, title):
+#         image = self.view(image)
+#         self.array.set_array(image)
+#         self.ax.set_title(title)
+#         display(self.fig)
+#         clear_output(wait=True)
 
-    @staticmethod
-    def norm(x):
-        x = np.abs(x)
-        lower = np.min(x)
-        upper = np.max(x)
-        return (x- lower) / (upper - lower)
+#     @staticmethod
+#     def norm(x):
+#         x = np.abs(x)
+#         lower = np.min(x)
+#         upper = np.max(x)
+#         return (x- lower) / (upper - lower)
     
 
 class LossFigure:

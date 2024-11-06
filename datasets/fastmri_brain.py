@@ -9,6 +9,8 @@ import os
 from pqdm.threads import pqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+import pickle
+
 class Fastmri_brain(Dataset):
     """get dataset fastmri_brain.
     This class is a subclass of torch.utils.datasets.Dataset and therefore accepted by DataLoader.
@@ -17,19 +19,32 @@ class Fastmri_brain(Dataset):
     so that you must choose one transformation function (see utils.transforms package in this project!)
     and you can alse combine this with torchvision.transforms.Compose."""
 
-    def __init__(self, path: str, transforms: typing.Callable, n_subset = None, debug = False, load_from_memory = False, n_jobs :int = 1):
+    def __init__(self, path: str, transforms: typing.Callable, n_subset = None, debug = False, load_from_memory = False, n_jobs :int = 1, disk_cache : str = None):
         super().__init__()
         self.path = path
         self.transforms = transforms
         self._sample_list = glob(pathname=os.path.join(path, '*.h5'))
+
+        print(f"{len(self._sample_list)} samples found in {path}")
+
         self.n_subset = n_subset if n_subset is not None else len(self._sample_list)
         self.debug = debug
         self.load_from_memory = load_from_memory
         self.n_jobs = n_jobs
+        self._cache = None
 
         self._sample_list = self._sample_list[:self.n_subset]
 
-        if self.load_from_memory:
+        if disk_cache is not None:
+            if os.path.exists(disk_cache):
+                with open(disk_cache, 'rb') as f:
+                    self._cache = pickle.load(f)
+                print(f"Data Preprocessing Done!, cached {len(self._cache)} samples.")
+            else:
+                self._cache = None
+                print(f"Disk cache not found, will preprocess data from scratch.")
+
+        if self.load_from_memory and self._cache is None:
             def job(ijob : int, item : str):
                 sample = h5py.File(item, 'r')
                 try:
@@ -41,6 +56,10 @@ class Fastmri_brain(Dataset):
 
             self._cache = pqdm(enumerate(self._sample_list), job, n_jobs=self.n_jobs, desc = 'Data Preprocessing', argument_type='args')
             print(f"Data Preprocessing Done!, cached {len(self._cache)} samples.")
+            if disk_cache is not None:
+                with open(disk_cache, 'wb') as f:
+                    pickle.dump(self._cache, f)
+                print(f"Data Preprocessing Done!, cached {len(self._cache)} samples.")
 
 
     def __getitem__(self, index: int):
@@ -56,33 +75,33 @@ class Fastmri_brain(Dataset):
         return sample
     
 
-    def __getitems__(self, index_list: list):
-        samples = []
-        if self.load_from_memory:
-            for index in index_list:
-                try:
-                    sample = self._cache[index]
-                except IndexError as e:
-                    print(f"msg={repr(e)}, index={index}, file={self._sample_list[index]}")
-                    print("total samples: ", len(self._cache))
-                    raise e
+    # def __getitems__(self, index_list: list):
+    #     samples = []
+    #     if self.load_from_memory:
+    #         for index in index_list:
+    #             try:
+    #                 sample = self._cache[index]
+    #             except IndexError as e:
+    #                 print(f"msg={repr(e)}, index={index}, file={self._sample_list[index]}")
+    #                 print("total samples: ", len(self._cache))
+    #                 raise e
 
-                samples.append(sample)
-            return samples
-        def job(index: int):
-            file = h5py.File(self._sample_list[index], 'r')
-            try:
-                sample = self.transforms(file)
-            except ValueError as e:
-                print(f"msg={repr(e)}, index={index}, file={self._sample_list[index]}")
-            return sample
-        # with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
-        #     for sample in executor.map(job, index_list):
-        #         samples.append(sample)
-        for index in index_list:
-            sample = job(index)
-            samples.append(sample)
-        return samples
+    #             samples.append(sample)
+    #         return samples
+    #     def job(index: int):
+    #         file = h5py.File(self._sample_list[index], 'r')
+    #         try:
+    #             sample = self.transforms(file)
+    #         except ValueError as e:
+    #             print(f"msg={repr(e)}, index={index}, file={self._sample_list[index]}")
+    #         return sample
+    #     # with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
+    #     #     for sample in executor.map(job, index_list):
+    #     #         samples.append(sample)
+    #     for index in index_list:
+    #         sample = job(index)
+    #         samples.append(sample)
+    #     return samples
     
 
     def __len__(self):

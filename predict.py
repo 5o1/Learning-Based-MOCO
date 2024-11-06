@@ -19,7 +19,7 @@ import datasets
 from models.unetComplex import UnetComplex
 from transforms.fft import Ifft
 from transforms.mri import FSE_readout
-from transforms.h5 import H52tensor
+from models.mynn.io import H52tensor
 from transforms.complex import ViewAsComplex, ViewAsReal
 from transforms.process import RandSlice
 

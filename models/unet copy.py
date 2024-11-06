@@ -3,8 +3,8 @@
 import torch.nn as nn
 import torch
 
-from .nn import AdaptedPad,AdaptedCrop, nConv2d, Up, Down, Boot, Output
-from .nn.functional import dict_filter
+from .mynn import AdaptedPad,AdaptedCrop, nConv2d, Up, Down, Boot, Output
+from .mynn.functional import dict_filter
 
 
 class Unet(nn.Module):

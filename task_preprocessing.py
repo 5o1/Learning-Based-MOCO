@@ -1,4 +1,3 @@
-
 import argparse
 import os
 import sys
@@ -34,7 +33,7 @@ if __name__ == '__main__':
         DoubleCheck(tag = 2),
         FSE_readout(ETL=8, probability=0.25,movefunc=RandomAffine(degrees = [3,3], translate = [1e-3,1e-3])),
         DoubleCheck(tag = 3),
-        ViewAsReal_combine(),
+        Complex2Real(),
         DoubleCheck(tag = 4)
     ])
 

@@ -37,10 +37,7 @@ if __name__ == '__main__':
         RandSlice(),
         SquareCrop(),
         Complex2Real(),
-        exp1(transforms = [
-            RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3]),
-            RandomAffine(degrees = [-3,3], translate = [1e-3,1e-3])
-        ]),
+        KlineHider(dim=[0,1], hiderate=0.2),
         CollectToList(x_keys=['x'], y_keys=['y'])
     ])
 

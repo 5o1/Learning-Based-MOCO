@@ -1,8 +1,7 @@
 import torch.nn as nn
 import torch
 
-from .nn import AdaptedPad,AdaptedCrop, Up, Down, Boot, Output, CheckNan, CheckInf
-from .nn.functional import dict_filter
+from .mynn import AdaptedPad,AdaptedCrop, Up, Down, Boot, Output, CheckNan, CheckInf
 
 
 class Unet(nn.Module):
