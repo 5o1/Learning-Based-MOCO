@@ -13,7 +13,7 @@ import os
 
 from ignite.engine import Engine, create_supervised_trainer, create_supervised_evaluator, Events
 from ignite.metrics import Loss, SSIM, PSNR
-from ignite.handlers import Checkpoint, global_step_from_engine
+from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -21,6 +21,8 @@ from torch.utils.data import DataLoader, Dataset
 from utils import Profile, DictFilter
 
 from matplotlib import pyplot as plt
+
+from datetime import datetime
 
 
 # Configurations
@@ -33,22 +35,91 @@ LOG_DATEFORMAT =  '%Y/%m/%d %H:%M:%S'
 TASK_NAME = 'train'
 
 
+#########################
+# Data Processing Utilities begin
+# def output_transform(output):
+#     """Transform output to metric input."""
+#     return output_transform(output[0], output[1])
+
+def _to_device(data, device):
+    """Recursively move data to device."""
+    if isinstance(data, dict):
+        return {key: _to_device(value, device) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [_to_device(item, device) for item in data]
+    elif torch.is_tensor(data):
+        return data.to(device)
+    else:
+        return data
+
+# def get_data(batch: torch.Tensor | dict, keys: list | int | str):
+#     """Get data from batch"""
+#     if isinstance(keys, (str, int)):
+#         return batch[keys]
+#     if isinstance(keys, list):
+#         if len(keys) == 1 and isinstance(keys[0], (str, int)):
+#             return batch[keys[0]]
+#         if all(isinstance(key, int) for key in keys):
+#             return [get_data(batch, key) for key in keys]
+#         if all(isinstance(key, str) for key in keys):
+#             return {key:get_data(batch, key) for key in keys}
+#     logger.error(f'keys={keys} is not supported.')
+#     raise NotImplementedError(f'keys={keys} is not supported.')
+# Data Processing Utilities end
+#########################
+
+
+
 def train(
-        exp_name : str, batch_size: int, epoch: int, learning_rate :float, save_to : str,
+        exp_name : str, batch_size: int, epoch: int, learning_rate :float, exp_basedir : str,
         loss_fn: Callable,
         model : torch.nn.Module,
         train_dataset: Dataset,
         val_dataset: Dataset, 
-        for_dump: dict = None,
-        x_keys : list = [0],
-        y_keys : list = [1],
+        epoch_length: int = None,
+        eval_length_train: int = None,
+        eval_length_val: int = None,
+        loader_num_workers: int = 8,
+        # for_dump: dict = None, # Todo
+        enhance_transform : Callable = lambda x : x,
+        input_transform : Callable = lambda x : x,
         output_transform : Callable = lambda x : x,
-        display_transform : Callable = None,
-        tensorboard_on : bool = True
+        show_transform : Callable = None,
+        checkpoint_every_epoch : int = 10,
+        maxnum_checkpoints : int = 10,
+        validate_every_epoch : int = 1,
+        device : torch.device | str = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        to_device : Callable = _to_device,
+        tensorboard_basedir : str = None,
+        # continue_from : str = None, # Todo
         ):
+    #########################
+    # parameter check begin
+    if epoch_length is None:
+        epoch_length = len(train_dataset)
+
+    if eval_length_train is None:
+        eval_length_train = len(train_dataset)
+
+    if eval_length_val is None:
+        eval_length_val = len(val_dataset)
+
+    #########################
+    # Path
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    save_to = os.path.join(exp_basedir, f"{exp_name}_{TASK_NAME}_{timestamp}")
+
+    assert not os.path.exists(save_to), f'{save_to} already exists!'
+    os.makedirs(save_to, exist_ok=True)
+
+    LOG_PATH = os.path.join(save_to, f'{TASK_NAME}.log')
+    ARGS_PATH = os.path.join(save_to, 'args.yaml')
+    NETWORKARCH_PATH = os.path.join(save_to, 'model_architecture.yaml')
+    DUMP_PATH = os.path.join(save_to, key)
+    TENSORBOARD_LOG_PATH = tensorboard_basedir
     
     #########################
-    # Configuring the logger begin
+    # logger configuration begin
     # Configure logger
     formatter = logging.Formatter(fmt = LOG_FORMAT, datefmt=LOG_DATEFORMAT)
     logger = logging.getLogger(TASK_NAME)
@@ -59,7 +130,6 @@ def train(
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     # File log handler
-    LOG_PATH = os.path.join(save_to, f'{TASK_NAME}.log')
     if os.path.exists(LOG_PATH):
         msg = f'File {LOG_PATH} exists!'
         logger.error(msg)
@@ -68,52 +138,30 @@ def train(
     logfile_handler.setLevel(LOG_FILE_LEVEL)
     logfile_handler.setFormatter(formatter)
     logger.addHandler(logfile_handler)
-    # Configuring the logger end
+    # logger configuration end
+    #########################
+
+    #########################
+    # tensorboard configuration begin
+    if tensorboard_basedir is not None:
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+        except ImportError:
+            logger.warning('torch.utils.tensorboard is not installed. Please install torch.utils.tensorboard to use tensorboard.')
+            SummaryWriter = None
+        else:
+            writer = SummaryWriter(log_dir=TENSORBOARD_LOG_PATH)
+    # tensorboard configuration end
     #########################
 
     # Get device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.debug(f'|||||Trainer now using device: {device}|||||')
     model.to(device)
 
     # Prepare dataloader
-    train_loader = DataLoader(train_dataset, num_workers=8, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, num_workers=8, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, num_workers=loader_num_workers, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, num_workers=loader_num_workers, batch_size=batch_size, shuffle=True)
     logger.debug(f'Total samples: train_loader{len(train_loader)}, val_loader{len(val_loader)}')
-
-
-    #########################
-    # Data Processing Utilities begin
-    def output_transform(output):
-        """Transform output to metric input."""
-        return output_transform(output[0], output[1])
-    
-    def to_device(data, device):
-        """Recursively move data to device."""
-        if isinstance(data, dict):
-            return {key: to_device(value, device) for key, value in data.items()}
-        elif isinstance(data, list):
-            return [to_device(item, device) for item in data]
-        elif torch.is_tensor(data):
-            return data.to(device)
-        else:
-            return data
-
-    def get_data(batch: torch.Tensor | dict, keys: list | int | str):
-        """Get data from batch"""
-        if isinstance(keys, (str, int)):
-            return batch[keys]
-        if isinstance(keys, list):
-            if len(keys) == 1 and isinstance(keys[0], (str, int)):
-                return batch[keys[0]]
-            if all(isinstance(key, int) for key in keys):
-                return [get_data(batch, key) for key in keys]
-            if all(isinstance(key, str) for key in keys):
-                return {key:get_data(batch, key) for key in keys}
-        logger.error(f'keys={keys} is not supported.')
-        raise NotImplementedError(f'keys={keys} is not supported.')
-    # Data Processing Utilities end
-    #########################
 
     # Prepare metrics
     metrics = {
@@ -125,7 +173,6 @@ def train(
     #########################
     # Saving Experiment Configurations begin
     # Save args.yaml to file
-    ARGS_PATH = os.path.join(save_to, 'args.yaml')
     args_profile = Profile(
         profile={
             TASK_NAME:{
@@ -154,23 +201,21 @@ def train(
         torchinfo = None
     else:
         # Save model.torchinfo to file
-        NETWORKARCH_PATH = os.path.join(save_to, 'model_architecture.yaml')
         summary_profile = Profile(profile=str(torchinfo.summary(
                 model = model,
-                input_data=[get_data(next(iter(train_loader)), x_keys)],
+                input_data=[input_transform(next(iter(train_loader))[0])],
                 depth=5,
                 device=device,
         )))
         summary_profile.dump(save_to=NETWORKARCH_PATH)
         logger.debug(summary_profile.get())
 
-    # Save for_dump[keys] to file
-    if for_dump is not None:
-        for key, value in for_dump:
-            DUMP_PATH = os.path.join(save_to, key)
-            value_profile = Profile(profile=value,filter=DictFilter())
-            value_profile.dump(save_to=DUMP_PATH)
-            logger.debug(value_profile.get())
+    # # Save for_dump[keys] to file
+    # if for_dump is not None:
+    #     for key, value in for_dump:
+    #         value_profile = Profile(profile=value,filter=DictFilter())
+    #         value_profile.dump(save_to=DUMP_PATH)
+    #         logger.debug(value_profile.get())
 
     # Saving Experiment Configurations end
     #########################
@@ -191,42 +236,50 @@ def train(
 
     def train_step(engine, batch):
         """Train step."""
-        model.train()
+        if not model.training:
+            model.train()
+
+        batch = to_device(batch, device)
+        # gpu
+        with torch.no_grad(): # prepare
+            batch = enhance_transform(batch)
+            x, y = input_transform(batch)
+
         optimizer.zero_grad()
-        x, y = get_data(batch, x_keys), get_data(batch, y_keys)
-        x = to_device(x, device)
-        y = to_device(y, device)
 
-        y_pred = model(x)
+        pred = model(x)
 
-        loss = loss_fn(y_pred, y)
-        loss.backward()
+        loss_score = loss_fn(pred, y)
+        loss_score.backward()
         optimizer.step()
-        return loss.item()
-        # return y_pred, y
+
+        if tensorboard_basedir is not None:
+            writer.add_scalar('iteration/loss', loss_score.item(), engine.state.iteration)
+
+        return loss_score.item()
 
     trainer = Engine(train_step)
-    # metric = Loss(loss_fn=loss_fn, device=device)
-    # metric.attach(train_step, "Loss")
 
     def validation_step(engine, batch):
-        """Validation step."""
-        model.eval()
-        with torch.no_grad():
-            x, y = get_data(batch, x_keys), get_data(batch, y_keys)
-            x = to_device(x, device)
-            y = to_device(y, device)
-            y_pred = model(x)
-            return y_pred, y
+        """Validation step. Note that this function and train_step are not the difference between the training set and the test set, that is, train_step is used for gradient descent and validation_step is used to calculate metrics"""
+        if model.training:
+            model.eval()
+        
+        batch = to_device(batch, device)
+        # gpu
+        with torch.no_grad(): # prepare
+            batch = enhance_transform(batch)
+            x, y = input_transform(batch)
 
-    train_evaluator = Engine(validation_step)
+            pred = model(x)
+            return pred, y
+
+    train_evaluator = Engine(validation_step) # Note that metrics and loss are not the same thing.
     val_evaluator = Engine(validation_step)
 
     # Attach metrics to the evaluators
     for name, metric in metrics.items():
-        # metric.attach(train_evaluator, name)
-        if name == 'loss':
-            metric.attach(train_evaluator, name)
+        metric.attach(train_evaluator, name)
 
     for name, metric in metrics.items():
         metric.attach(val_evaluator, name)
@@ -238,85 +291,100 @@ def train(
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_training_results(trainer):
         """Log training results."""
-        train_evaluator.run(train_loader)
+        train_evaluator.run(train_loader, epoch_length=eval_length_train)
         metrics = train_evaluator.state.metrics
-        # logger.info(f"Training Results - Epoch[{trainer.state.epoch}/{epoch}] SSIM: {metrics['SSIM']} PSNR:{metrics['PSNR']} Avg loss: {metrics['loss']}")
-        logger.info(f"Training Results - Epoch[{trainer.state.epoch}/{epoch}] Avg loss: {metrics['loss']}")
+        logger.info(f"Training Results - Epoch[{trainer.state.epoch}/{epoch}] SSIM: {metrics['SSIM']} PSNR:{metrics['PSNR']} Avg loss: {metrics['loss']}")
+
+        if tensorboard_basedir is not None:
+            writer.add_scalar('training/SSIM', metrics['SSIM'], trainer.state.epoch)
+            writer.add_scalar('training/PSNR', metrics['PSNR'], trainer.state.epoch)
+            writer.add_scalar('training/loss', metrics['loss'], trainer.state.epoch)
+
         train_history.append(metrics.items())
 
 
-    @trainer.on(Events.EPOCH_COMPLETED)
+    @trainer.on(Events.EPOCH_COMPLETED(every=validate_every_epoch))
     def log_validation_results(trainer):
         """Log validation results."""
-        val_evaluator.run(val_loader)
+        val_evaluator.run(val_loader, epoch_length=eval_length_val)
         metrics = val_evaluator.state.metrics
         logger.info(f"Validation Results - Epoch[{trainer.state.epoch}/{epoch}] SSIM: {metrics['SSIM']} PSNR:{metrics['PSNR']} Avg loss: {metrics['loss']}")
+        if tensorboard_basedir is not None:
+            writer.add_scalar('validation/SSIM', metrics['SSIM'], trainer.state.epoch)
+            writer.add_scalar('validation/PSNR', metrics['PSNR'], trainer.state.epoch)
+            writer.add_scalar('validation/loss', metrics['loss'], trainer.state.epoch)
+
         val_history.append(metrics.items())
 
-    # to_save = {'model': model, 'optimizer': optimizer, 'trainer': trainer}
-    # checkpoint_dir = "checkpoints/"
+    # checkpoint
+    _to_save_dict = {'model': model, 'optimizer': optimizer}
 
-    # checkpoint = Checkpoint(
-    #     to_save=to_save,
-    #     save_handler=OUTDIR,
-    #     n_saved=1,
-    #     global_step_transform=global_step_from_engine(trainer),
-    # )  
-    # train_evaluator.add_event_handler(Events.COMPLETED, checkpoint)
+    every_n_checkpointer = Checkpoint(
+        to_save=_to_save_dict,
+        save_handler=DiskSaver(save_to,create_dir=True, require_empty=False),
+        filename_prefix='checkpoint',
+        n_saved=maxnum_checkpoints,
+        global_step_transform=global_step_from_engine(trainer),
+    )
 
+    best_loss_checkpointer = Checkpoint(
+        to_save=_to_save_dict,
+        save_handler=DiskSaver(save_to,create_dir=True, require_empty=False),
+        filename_prefix='best',
+        n_saved=1,
+        score_name='loss',
+        score_function=lambda engine: -engine.state.metrics['loss'],
+        global_step_transform=global_step_from_engine(trainer),
+    )
+
+    best_ssim_checkpointer = Checkpoint(
+        to_save=_to_save_dict,
+        save_handler=DiskSaver(save_to,create_dir=True, require_empty=False),
+        filename_prefix='best',
+        n_saved=1,
+        score_name='ssim',
+        score_function=lambda engine: engine.state.metrics['ssim'],
+        global_step_transform=global_step_from_engine(trainer),
+    )
+    
+    trainer.add_event_handler(Events.EPOCH_COMPLETED(every=checkpoint_every_epoch), every_n_checkpointer)
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, best_loss_checkpointer)
+    trainer.add_event_handler(Events.EPOCH_COMPLETED, best_ssim_checkpointer)
         
-    best = None
-    @trainer.on(Events.EPOCH_COMPLETED(every=10))
-    def save_model(trainer):
-        """Save model."""
-        epoch = trainer.state.epoch
-        model_state_dict = model.state_dict()
-        optimizer_state_dict = optimizer.state_dict()
-        metrics = train_evaluator.state.metrics
-        path = os.path.join(save_to,f'epoch{epoch}.checkpoint')
+    # best_score = None
+    # @trainer.on(Events.EPOCH_COMPLETED(every=checkpoint_every_epoch))
+    # def save_model(trainer):
+    #     """Save model."""
+    #     epoch = trainer.state.epoch
+    #     model_state_dict = model.state_dict()
+    #     optimizer_state_dict = optimizer.state_dict()
+    #     metrics = train_evaluator.state.metrics
+    #     path = os.path.join(save_to,f'epoch{epoch}.checkpoint')
 
-        savepoint = {
-            'epoch': epoch,
-            'model_state_dict': model_state_dict,
-            'optimizer_state_dict': optimizer_state_dict,
-            'loss': metrics['loss'],
-            }
+    #     savepoint = {
+    #         'epoch': epoch,
+    #         'model_state_dict': model_state_dict,
+    #         'optimizer_state_dict': optimizer_state_dict,
+    #         'loss': metrics['loss'],
+    #         }
 
-        torch.save(savepoint, path)
-        # Update last
-        path = os.path.join(save_to,f'last.model')
-        torch.save(savepoint, path)
+    #     torch.save(savepoint, path)
+    #     # Update last
+    #     path = os.path.join(save_to,f'last.model')
+    #     torch.save(savepoint, path)
         
-        # Update best
-        nonlocal best
-        if best == None or best['loss'] > metrics['loss']:
-            best = savepoint
-            path = os.path.join(save_to, f'best.model')
-            torch.save(best, path)
+    #     # Update best
+    #     nonlocal best_score
+    #     if best_score == None or best_score['loss'] > metrics['loss']:
+    #         best_score = savepoint
+    #         path = os.path.join(save_to, f'best.model')
+    #         torch.save(best_score, path)
         
     # Main training steps end
     #########################
 
-    #########################
-    # Tensor board logging begin
-
-    # Todo
-    if tensorboard_on:
-        from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler, WeightsScalarHandler, WeightsHistHandler
-        TB_LOGS_PATH = os.path.join(save_to, 'tb_logs')
-        tb_logger = TensorboardLogger(log_dir= TB_LOGS_PATH)
-        tb_logger.attach(trainer, log_handler=OutputHandler(tag="training", output_transform=lambda loss: {'loss': loss}), event_name=Events.ITERATION_COMPLETED)
-        tb_logger.attach(trainer, log_handler=OptimizerParamsHandler(optimizer), event_name=Events.ITERATION_STARTED)
-        tb_logger.attach(trainer, log_handler=WeightsScalarHandler(model), event_name=Events.ITERATION_COMPLETED)
-        # tb_logger.attach(trainer, log_handler=WeightsHistHandler(model), event_name=Events.EPOCH_COMPLETED)
-        tb_logger.attach(trainer, log_handler=OutputHandler(tag="training", output_transform=lambda x: {'loss': x}), event_name=Events.EPOCH_COMPLETED)
-        tb_logger.attach(val_evaluator, log_handler=OutputHandler(tag="validation", metric_names=list(metrics.keys()), global_step_transform=global_step_from_engine(trainer)), event_name=Events.EPOCH_COMPLETED)
-        
-    # Tensor board logging end
-    #########################
-
     # Trian
-    trainer.run(train_loader, max_epochs=epoch)
+    trainer.run(train_loader, max_epochs=epoch, epoch_length=epoch_length)
 
 
     #########################
@@ -325,8 +393,8 @@ def train(
     # Todo : loss curve, metric curve, testcase(image test) and metrics
 
     # loss curve
-    fig, axs = plt.subplots(1, len(metrics), figsize=(5*len(metrics), 5))
-    for i, (key, value) in enumerate(metrics.items()):
+    fig, axs = plt.subplots(1, len(metrics), figsize=(10*len(metrics), 10))
+    for i, key in enumerate(metrics.keys()):
         if key in train_history[0].keys():
             axs[i].plot([x[key] for x in train_history], label='train', color='darkorange')
         if key in val_history[0].keys():
@@ -337,23 +405,30 @@ def train(
     fig.savefig(os.path.join(save_to, 'loss_curve.png'))
 
     # Testcase
+    train_loader_shown = DataLoader(train_dataset, num_workers=loader_num_workers, batch_size=1, shuffle=True)
+    val_loader_shown = DataLoader(val_dataset, num_workers=loader_num_workers, batch_size=1, shuffle=True)
+
+    model.eval()
     with torch.no_grad():
-        x, y = get_data(next(iter(val_loader)), x_keys), get_data(next(iter(val_loader)), y_keys)
-        x = to_device(x, device)
-        y = to_device(y, device)
-        y_pred = model(x)
-        if display_transform is None:
-            display_transform = output_transform
-        y_pred, y = display_transform(y_pred, y)
-        y_pred = y_pred.cpu().numpy()
-        y = y.cpu().numpy()
-        fig, axs = plt.subplots(1, 2, figsize=(10, 5))
-        axs[0].imshow(y[0])
-        axs[0].set_title('Ground Truth')
-        axs[1].imshow(y_pred[0])
-        axs[1].set_title('Prediction')
+        batch = next(iter(train_loader_shown))
+        batch = to_device(batch, device)
+        batch = enhance_transform(batch)
+        x, y = input_transform(batch)
+        pred = model(x)
+
+        x, pred, y = map(lambda x: x.cpu().detach().numpy(), show_transform(x, pred, y))
+
+        fig, axs = plt.subplots(1, 3, figsize=(30, 10))
+        axs[0].imshow(x[0])
+        axs[0].set_title('input')
+        axs[0].axis('off')
+        axs[1].imshow(pred[0])
+        axs[1].set_title('pred')
+        axs[0].axis('off')
+        axs[2].imshow(y[0])
+        axs[2].set_title('gt')
+        axs[0].axis('off')
+
         fig.savefig(os.path.join(save_to, 'testcase.png'))
-
-
-    # Training results and evaluations begin
+    # Training results and evaluations end
     #########################
