@@ -19,7 +19,7 @@ import datetime
 import os
 
 import datasets
-from models.unet import Unet
+from models.unet import UNet
 from transforms import *
 
 from glob import glob
@@ -144,7 +144,7 @@ def testcase(x, label, model : torch.nn.Module, input_path : str, weight_path :s
 
 if __name__=="__main__":
     x, label, _ = makecase('/mnt/nfs_datasets/fastMRI_brain/multicoil_train_sorted/size_320_640_4/')
-    model = Unet(
+    model = UNet(
         in_channels=8,
         out_channels=8,
         depth = 6,

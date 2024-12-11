@@ -6,4 +6,4 @@ from utils import Profile
 profile = Profile(profile={"xyz":True})
 
 print(profile.get())
-profile.dump(save_to="test.yaml")
+profile.dump_to_file(save_to="test.yaml")

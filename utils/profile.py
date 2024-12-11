@@ -2,10 +2,10 @@
 
 
 import yaml
-import os
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Union
 import re
 import inspect
+import os
 
 class DictFilter:
     """
@@ -103,9 +103,9 @@ class DictFilter:
 class Profile:
     """Super class for dumping and loading profile data."""
 
-    def __init__(self, profile : dict | str, load_from_file = False, filter : Callable = None, flow_style :str = 'stereoscopic'):
+    def __init__(self, profile: Union[dict, str], load_from_file=False, filter: Callable = None, flow_style: str = 'stereoscopic'):
         if load_from_file:
-            self.load(profile)
+            self.load_from_file(profile)
         else:
             self.profile = profile
 
@@ -114,36 +114,66 @@ class Profile:
 
         self.flow_style = flow_style
 
-
     def get(self):
         return self.profile
     
+    class LiteralString(str): 
+        pass
+
+    class CustomDumper(yaml.Dumper):
+        pass
+
+    class CustomLoader(yaml.SafeLoader):
+        pass
+
+    def literal_str_representer(dumper: yaml.Dumper, data: str):
+        return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
     
-    @staticmethod
-    def stereoscopic_flow_style(dumper, data):
-        if isinstance(data, list) and all(isinstance(item, (int, float, str)) for item in data):
-            return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
-        return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=False)
+    def literal_str_constructor(loader: yaml.Loader, node: yaml.Node):
+        # Load the node as a standard Python string
+        value = loader.construct_scalar(node)
+        # Wrap it in LiteralString
+        return Profile.LiteralString(value)
+
+    CustomDumper.add_representer(LiteralString, literal_str_representer)
+    CustomLoader.add_constructor('tag:yaml.org,2002:str', literal_str_constructor)
+
+    # def stereoscopic_flow_style(dumper, data):
+    #     if isinstance(data, list) and all(isinstance(item, (int, float, str)) for item in data):
+    #         return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
+    #     return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=False)
+
+    def dump_to_string(self) -> str:            
+        def convert_to_literal_string(d):
+            for key, value in d.items():
+                if isinstance(value, str) and ('\n' in value or len(value) > 40):
+                    d[key] = Profile.LiteralString(value)
+                elif isinstance(value, dict):
+                    convert_to_literal_string(value)
+        profile_copy = self.profile.copy()
+        convert_to_literal_string(profile_copy)
+        return yaml.dump(profile_copy, Dumper=Profile.CustomDumper, default_flow_style=False, sort_keys=False)
+    
+    def load_from_string(yaml_string):
+        # Load the YAML string and convert it back into a dictionary
+        data = yaml.load(yaml_string, Loader=Profile.CustomLoader)
+        
+        # If necessary, further processing of data can be done here
+        return data
 
     
-    def dump(self, save_to : str, cover_if_exist : bool = False):
-        # Check is exist
-        if os.path.exists(save_to) and not cover_if_exist:
-            raise FileExistsError(f"File {save_to} already exists.")
-        # Dump
+    def __repr__(self) -> str:
+        return self.dump_to_string()
+
+    def dump_to_file(self, save_to: str):
+        """Return YAML dump of the profile as a string."""
         with open(save_to, 'w') as f:
-            # If profile is a dict, dump with yaml format, else dump with str format
-            if isinstance(self.profile, dict):
-                # Construct yaml dumper
-                dumper = yaml.Dumper
-                if self.flow_style == 'stereoscopic':
-                    dumper.add_representer(list, self.stereoscopic_flow_style)
-                yaml.dump(self.profile, f, Dumper=dumper, default_flow_style= False, sort_keys= False)
-            else:
-                print(str(self.profile), file=f)
-    
-    def load(self, load_from : str):
-        # Todo
-        self.profile = 1
-    
+            f.write(repr(self))
 
+    def load_from_file(self, load_from: str):
+        """Loads profile data from a YAML file at the specified path."""
+        if not os.path.exists(load_from):
+            raise FileNotFoundError(f"File {load_from} does not exist.")
+        
+        with open(load_from, 'r') as f:
+            self.profile = yaml.load(f, Loader=Profile.CustomLoader)

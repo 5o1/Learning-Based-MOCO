@@ -1,26 +1,15 @@
 import torch
-from torchvision import transforms
-from torch import nn
-from torch.nn import functional as F
-from torch.utils.data import DataLoader, Dataset
-
-from models import mynn as mynn
-from models.mynn import functional as myf
+from torch.utils.data import Dataset
 
 from random import shuffle
-
-from einops import rearrange, repeat
-
-from torchkbnufft import KbNufft, KbNufftAdjoint, calc_tensor_spmatrix, calc_density_compensation_function, ToepNufft
-
 import numpy as np
 
 import os
 
 # ismrmrd_header rss csm kspace
-class Fastmri_320(Dataset):
+class Fastmri_320p(Dataset):
     def __init__(self, filelist, num_subset = None, transform=None, lazy_memory=True, output_keys=["kspace", "after_transform"], output_type = dict, disk_cache = False):
-        super(Fastmri_320, self).__init__()
+        super(Fastmri_320p, self).__init__()
         self.filelist = filelist
         self.num_subset = num_subset
         self.transform = transform
@@ -29,7 +18,7 @@ class Fastmri_320(Dataset):
         self.output_type = output_type
         self.disk_cache = disk_cache
 
-        self.extension_cache = "._cached"
+        self.extension_disk_cache = "._cached"
 
         if self.num_subset is not None:
             self.filelist = self.filelist[:self.num_subset]
@@ -49,18 +38,27 @@ class Fastmri_320(Dataset):
                 self.release(ratio=0.75)
                 self.lazy_cache = True
 
-    def getname_disk_cache(self, path):
-        return path + self.extension_cache
+    def mnemonic_disk_cache(self, path):
+        """
+        Get the name of the disk cache file.
+        """
+        return path + self.extension_disk_cache
 
     def clean_disk_cache(self):
+        """
+        Clean the disk cache files.
+        """
         print("WARNING: This will remove all disk cache files with the extension '._cached'.")
         for path, idx in self.filelist:
-            cache_path = self.getname_disk_cache(path)
+            cache_path = self.mnemonic_disk_cache(path)
             if os.path.exists(cache_path):
                 os.remove(cache_path)
 
     def load(self, path):
-        cache_path = self.getname_disk_cache(path)
+        """
+        Load the data from the file path.
+        """
+        cache_path = self.mnemonic_disk_cache(path)
 
         if self.disk_cache: # load from disk cache
             if os.path.exists(cache_path):
@@ -77,16 +75,18 @@ class Fastmri_320(Dataset):
                 torch.save(self._cache[path], cache_path)
 
     def release(self, ratio = 0.5):
+        """
+        Release the memory by deleting the cache with a ratio of the total cache.
+        """
         assert 0 < ratio <= 1 , "The ratio must be a float between 0 and 1."
 
         keys_to_delete = shuffle(list(self._cache.keys()))[:int(len(self._cache) * ratio)]
         for key in keys_to_delete:
             del self._cache[key]
 
-
     def __len__(self):
         return len(self.filelist)
-    
+
     def __getitem__(self, idx):
         path, index = self.filelist[idx]
 
