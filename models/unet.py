@@ -19,44 +19,55 @@ class nConv2d(nn.Module):
         self.depth = depth
         self.dtype = dtype
         self.padding = padding
-        self.norm_layer = norm_layer if norm_layer is not None else nn.Identity()
-        self.act_layer = act_layer if act_layer is not None else nn.Identity()
+        self.norm_layer = norm_layer
+        self.act_layer = act_layer
 
         self.layers = [nn.Conv2d(channels, channels, kernel_size=kernel_size, padding=padding, dtype=dtype, bias=bias)]
         for _ in range(depth - 1):
-            self.layers.append(copy.deepcopy(self.norm_layer)) if norm_layer is not None else None
-            self.layers.append(copy.deepcopy(self.act_layer))
+            self.layers.append(self.norm_layer(channels)) if self.norm_layer is not None else None
+            self.layers.append(self.act_layer()) if self.act_layer is not None else None
             self.layers.append(nn.Conv2d(channels, channels, kernel_size=kernel_size, padding=padding, dtype=dtype, bias=bias))
         self.layers = nn.Sequential(*self.layers)
 
     def forward(self, x: torch.Tensor):
         x = self.layers(x)
         return x
+    
+    def get_shape_history(self):
+        if self.padding == 'same':
+            return [lambda x:x] * self.depth
+        else:
+            return [lambda x: x + 2 * self.padding - self.kernel_size + 1] * self.depth
 
 
 class Down(nn.Module):
     """conv -> downsample"""
 
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, depth: int = 2, dtype = torch.float32, padding = 0, norm_layer: nn.Module = None, act_layer : nn.Module = nn.ReLU(), downsample = None, bias = False) -> None:
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, depth: int = 2, dtype = torch.float32, padding = 0, norm_layer: nn.Module = None, act_layer : nn.Module = nn.ReLU, downsample_layer = None, bias = False) -> None:
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.dtype = dtype
         self.padding = padding
         self.norm_layer = norm_layer
+        self.act_layer = act_layer
+        self.downsample_layer = downsample_layer
         self.conv = nConv2d(channels=in_channels, kernel_size=kernel_size, depth=depth, dtype=dtype, padding=padding, norm_layer=norm_layer, act_layer=act_layer, bias=bias)
-        self.down = nn.Conv2d(in_channels, out_channels, kernel_size=2, stride=2, dtype=dtype, bias=bias) if downsample is None else downsample
+        self.down = nn.Conv2d(in_channels, out_channels, kernel_size=2, stride=2, dtype=dtype, bias=bias) if self.downsample_layer is None else self.downsample_layer(2)
 
     def forward(self, x: torch.Tensor):
         x = self.conv(x)
         x = self.down(x)
         return x
+        
+    def get_shape_history(self):
+        return self.conv.get_shape_history() + [lambda x: x // 2]
 
 
 class CALayer(nn.Module):
     """Channel Attention Layer"""
 
-    def __init__(self, in_channels: int, reduction: int = 16, act_layer: nn.Module = nn.ReLU(), bias = False) -> None:
+    def __init__(self, in_channels: int, reduction: int = 16, act_layer: nn.Module = nn.ReLU, bias = False) -> None:
         super().__init__()
         self.in_channels = in_channels
         self.reduction = reduction
@@ -64,7 +75,7 @@ class CALayer(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
             nn.Linear(in_channels, in_channels // reduction, bias=bias),
-            copy.deepcopy(act_layer),
+            self.act_layer() if self.act_layer is not None else None,
             nn.Linear(in_channels // reduction, in_channels, bias=bias),
         )
 
@@ -81,7 +92,7 @@ class CABlock(nn.Module):
     res: conv -> relu -> conv -> ca
     x: +res(x)"""
 
-    def __init__(self, in_channels: int, reduction: int = 4, act_layer: nn.Module = nn.ReLU(), bias = False) -> None:
+    def __init__(self, in_channels: int, reduction: int = 4, act_layer: nn.Module = nn.ReLU, bias = False) -> None:
         super().__init__()
         self.in_channels = in_channels
         self.reduction = reduction
@@ -89,7 +100,7 @@ class CABlock(nn.Module):
         self.ca = CALayer(in_channels, reduction, act_layer, bias)
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=bias),
-            copy.deepcopy(act_layer),
+            self.act_layer() if self.act_layer is not None else None,
             nn.Conv2d(in_channels, in_channels, kernel_size=3, padding=1, bias=bias)
         )
 
@@ -100,16 +111,19 @@ class CABlock(nn.Module):
 
 class Up(nn.Module):
     """upsample -> concat -> conv -> reduce -> cablock"""
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, depth: int = 2, dtype = torch.float32, padding = 0, norm_layer: nn.Module = None, act_layer: nn.Module = nn.ReLU(), upsample = None, bias = False) -> None:
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3, depth: int = 2, dtype = torch.float32, padding = 0, norm_layer: nn.Module = None, act_layer: nn.Module = nn.ReLU(), upsample_layer = None, bias = False) -> None:
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.dtype = dtype
+        self.kernel_size = kernel_size
         self.padding = padding
         self.norm_layer = norm_layer
+        self.act_layer = act_layer
+        self.upsample_layer = upsample_layer
         self.conv = nConv2d(channels=out_channels * 2, kernel_size=kernel_size, depth=depth, dtype=dtype, padding=padding, norm_layer=norm_layer, act_layer=act_layer, bias=bias)
         self.reduce = nn.Conv2d(out_channels * 2, out_channels, kernel_size=1, dtype=dtype, bias=bias)
-        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2, dtype=dtype, bias=bias) if upsample is None else upsample
+        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2, dtype=dtype, bias=bias) if self.upsample_layer is None else self.upsample_layer(2)
         self.ca = CABlock(out_channels, bias=bias)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor):
@@ -119,103 +133,108 @@ class Up(nn.Module):
         x = self.reduce(x)
         x = self.ca(x)
         return x
+    
+    def get_shape_history(self):
+        return [lambda x: x*2] + self.conv.get_shape_history()
 
 
 
     
 
-class AdaptedPad(nn.Module):
-    """In order to modify Unet to be able to accept input from images of arbitrary size"""
+# class AdaptedPad(nn.Module):
+#     """In order to modify Unet to be able to accept input from images of arbitrary size"""
+#     def __init__(self, depth : int, kernel_size : int = 2):
+#         """depth: Unet depth.
+#         n : nConv2d in one step."""
+#         super().__init__()
+#         self.depth = depth
+#         self.kernel_size = kernel_size
+
+#         self.prefix = {}
+
+#         for i in range(100):
+#             right = i
+#             left = i + 2 * kernel_size
+#             for _ in range(self.depth):
+#                 left = left * 2  + 2 * kernel_size
+#                 right = right * 2 - 2 * kernel_size
+#             if right <= 0:
+#                 continue
+#             self.prefix[right] = left
 
 
-    def __init__(self, depth : int, kernel_size : int = 2):
-        """depth: Unet depth.
-        n : nConv2d in one step."""
-        super().__init__()
-        self.depth = depth
-        self.kernel_size = kernel_size
+#     def forward(self, image: torch.Tensor):
+#         shape = image.shape
 
-        self.prefix = {}
+#         self.shape0 = [shape[-2], shape[-1]]
+#         shapen = torch.tensor(self.shape0)
+#         # backward_up
+#         for _ in range(self.depth):
+#             shapen = shapen + self.kernel_size * 2
+#             shapen = shapen // 2 + shapen % torch.tensor(2)
 
-        for i in range(100):
-            right = i
-            left = i + 2 * kernel_size
-            for _ in range(self.depth):
-                left = left * 2  + 2 * kernel_size
-                right = right * 2 - 2 * kernel_size
-            if right <= 0:
-                continue
-            self.prefix[right] = left
+#         # forward_up
+#         for _ in range(self.depth):
+#             shapen = shapen * 2
+#             shapen = shapen - self.kernel_size * 2
+#         shapen = torch.tensor([self.prefix[shapen[0].item()] , self.prefix[shapen[1].item()]])
+#         # # backward_down
+#         # for _ in range(self.d):
+#         #     shapen = shapen + self.n * 2
+#         #     shapen = shapen * 2
 
-
-    def __call__(self, image: torch.Tensor):
-        shape = image.shape
-
-        self.shape0 = [shape[-2], shape[-1]]
-        shapen = torch.tensor(self.shape0)
-        # backward_up
-        for _ in range(self.depth):
-            shapen = shapen + self.kernel_size * 2
-            shapen = shapen // 2 + shapen % torch.tensor(2)
-
-        # forward_up
-        for _ in range(self.depth):
-            shapen = shapen * 2
-            shapen = shapen - self.kernel_size * 2
-        shapen = torch.tensor([self.prefix[shapen[0].item()] , self.prefix[shapen[1].item()]])
-        # # backward_down
-        # for _ in range(self.d):
-        #     shapen = shapen + self.n * 2
-        #     shapen = shapen * 2
-
-        # # backward_in
-        # shapen = shapen + self.n * 2
+#         # # backward_in
+#         # shapen = shapen + self.n * 2
         
-        divshape = shapen - torch.tensor(self.shape0)
-        # padding
-        pad = tf.Pad([divshape[-1] // 2, divshape[-1] // 2 ,
-                      divshape[-2] // 2, divshape[-2] // 2 ],
-                      padding_mode='reflect')
-        image = pad(image)
-        return image
+#         divshape = shapen - torch.tensor(self.shape0)
+#         # padding
+#         pad = tf.Pad([divshape[-1] // 2, divshape[-1] // 2 ,
+#                       divshape[-2] // 2, divshape[-2] // 2 ],
+#                       padding_mode='reflect')
+#         image = pad(image)
+#         return image
     
 
-    def crop(self, image):
-        crop = tf.CenterCrop(self.shape0)
-        image = crop(image)
-        return image
+#     def crop(self, image):
+#         crop = tf.CenterCrop(self.shape0)
+#         image = crop(image)
+#         return image
     
 
-class AdaptedCrop(nn.Module):
-    def __init__(self, n : int = 2):
-        super().__init__()
-        self.n = n
+# class AdaptedCrop(nn.Module):
+#     def __init__(self, n : int = 2):
+#         super().__init__()
+#         self.n = n
 
 
-    def __call__(self, image: torch.Tensor, d : int):
-        """depth: The number of times it's time to down."""
-        if d == 0:
-            return image
-        shape = image.shape
-        shapen = torch.tensor([shape[-2], shape[-1]])
-        # down
-        for _ in range(d):
-            shapen = shapen // 2
-            shapen = shapen - 2 * self.n
+#     def forward(self, image: torch.Tensor, d : int):
+#         """depth: The number of times it's time to down."""
+#         if d == 0:
+#             return image
+#         shape = image.shape
+#         shapen = torch.tensor([shape[-2], shape[-1]])
+#         # down
+#         for _ in range(d):
+#             shapen = shapen // 2
+#             shapen = shapen - 2 * self.n
 
-        # up
-        shapen = shapen * 2
-        for _ in range(d - 1):
-            shapen = shapen - 2 * self.n
-            shapen = shapen * 2
-        crop = tf.CenterCrop((shapen[0].item(),shapen[1].item()))
-        image = crop(image)
-        return image
+#         # up
+#         shapen = shapen * 2
+#         for _ in range(d - 1):
+#             shapen = shapen - 2 * self.n
+#             shapen = shapen * 2
+#         crop = tf.CenterCrop((shapen[0].item(),shapen[1].item()))
+#         image = crop(image)
+#         return image
 
 class UNet(nn.Module):
 
-    def __init__(self, in_channels : int = 4 , out_channels : int = 4 , depth : int = 4, top_channels : int = 64, dtype = torch.float32, crop_res : bool = False, norm_layer: nn.Module = None) -> None:
+    def __init__(self, in_channels : int = 4 , out_channels : int = 4 , depth : int = 4, top_channels : int = 64, dtype = torch.float32, crop_res : bool = False, norm_layer: nn.Module = None, act_layer: nn.Module = nn.ReLU, upsample_layer = None, downsample_layer = None) -> None:
         super().__init__()
+
+        if crop_res:
+            raise NotImplementedError("crop_res is not implemented yet.")
+
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.depth = depth
@@ -224,36 +243,39 @@ class UNet(nn.Module):
         self.crop_res = crop_res
         self.padding = 0 if crop_res else 'same'
         self.norm_layer = norm_layer
+        self.act_layer = act_layer
+        self.upsample_layer = upsample_layer
+        self.downsample_layer = downsample_layer
 
-        if self.crop_res:
-            self._pad = AdaptedPad(depth)
-            self._crop = AdaptedCrop()
+        # if self.crop_res:
+        #     self._pad = AdaptedPad(depth)
+        #     self._crop = AdaptedCrop()
         self._checknan = mynn.CheckNan()
         self._checkinf = mynn.CheckInf()
 
-        self._in = nn.Conv2d(in_channels, top_channels, kernel_size=3, padding=self.padding, dtype=dtype)
+        self._in = nn.Conv2d(in_channels, top_channels, kernel_size=1, padding='same', dtype=dtype)
         self._down = self.build_encoder()
         self._bottom = self.build_bottleneck()
         self._up = self.build_decoder()
-        self._out = nn.Conv2d(top_channels, out_channels, kernel_size=3, padding=self.padding, dtype=dtype)
+        self._out = nn.Conv2d(top_channels, out_channels, kernel_size=1, padding='same', dtype=dtype)
 
 
     def build_encoder(self):
         # self._down = nn.Sequential(*[Down(top_channels * 2 ** i, top_channels * 2 ** (i + 1), dtype = dtype, padding = self.padding, norm_layer = norm_layer) for i in range(depth)])
         encoder = nn.Sequential(
-            *[Down(self.top_channels * 2 ** i, self.top_channels * 2 ** (i + 1), dtype = self.dtype, padding = self.padding, norm_layer = self.norm_layer) for i in range(self.depth)]
+            *[Down(self.top_channels * 2 ** i, self.top_channels * 2 ** (i + 1), dtype = self.dtype, padding = self.padding, norm_layer = self.norm_layer, act_layer = self.act_layer, downsample_layer = self.downsample_layer) for i in range(self.depth)]
         )
         return encoder
     
     def build_decoder(self):
         decoder = nn.Sequential(
-            *[Up(self.top_channels * 2 ** (self.depth - i), self.top_channels * 2 ** (self.depth - i - 1), dtype = self.dtype, padding = self.padding, norm_layer = self.norm_layer) for i in range(self.depth)]
+            *[Up(self.top_channels * 2 ** (self.depth - i), self.top_channels * 2 ** (self.depth - i - 1), dtype = self.dtype, padding = self.padding, norm_layer = self.norm_layer, act_layer = self.act_layer, upsample_layer = self.upsample_layer) for i in range(self.depth)]
         )
         return decoder
     
     def build_bottleneck(self):
         bottleneck = nn.Sequential(
-            nConv2d(self.top_channels * 2 ** self.depth, 3, 2, self.dtype, self.padding, self.norm_layer),
+            nConv2d(self.top_channels * 2 ** self.depth, 3, 2, self.dtype, self.padding, self.norm_layer, self.act_layer),
             CABlock(self.top_channels * 2 ** self.depth)
         )
         return bottleneck

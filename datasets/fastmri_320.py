@@ -8,7 +8,7 @@ import os
 
 # ismrmrd_header rss csm kspace
 class Fastmri_320p(Dataset):
-    def __init__(self, filelist, num_subset = None, transform=None, lazy_memory=True, output_keys=["kspace", "after_transform"], output_type = dict, disk_cache = False):
+    def __init__(self, filelist, num_subset = None, transform=None, lazy_memory=True, output_keys=["kspace"], output_type = dict, disk_cache = False):
         super(Fastmri_320p, self).__init__()
         self.filelist = filelist
         self.num_subset = num_subset

@@ -7,3 +7,4 @@ from .structure import *
 from .pe import *
 from .algo import *
 from .functional import *
+from .loss import *

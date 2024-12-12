@@ -18,9 +18,8 @@ import pandas as pd
 
 from ignite.engine import Engine, create_supervised_trainer, create_supervised_evaluator, Events
 from ignite.metrics import Loss, SSIM, PSNR
-from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver, TensorboardLogger
+from ignite.handlers import Checkpoint, global_step_from_engine, DiskSaver, TensorboardLogger, EarlyStopping
 
-from matplotlib.pylab import f
 import torch
 from torch.utils.data import DataLoader, Dataset
 
@@ -43,10 +42,6 @@ TASK_NAME = 'train'
 
 #########################
 # Data Processing Utilities begin
-# def output_transform(output):
-#     """Transform output to metric input."""
-#     return output_transform(output[0], output[1])
-
 def _to_device(data, device):
     """Recursively move data to device."""
     if isinstance(data, dict):
@@ -58,19 +53,38 @@ def _to_device(data, device):
     else:
         return data
 
-# def get_data(batch: torch.Tensor | dict, keys: list | int | str):
-#     """Get data from batch"""
-#     if isinstance(keys, (str, int)):
-#         return batch[keys]
-#     if isinstance(keys, list):
-#         if len(keys) == 1 and isinstance(keys[0], (str, int)):
-#             return batch[keys[0]]
-#         if all(isinstance(key, int) for key in keys):
-#             return [get_data(batch, key) for key in keys]
-#         if all(isinstance(key, str) for key in keys):
-#             return {key:get_data(batch, key) for key in keys}
-#     logger.error(f'keys={keys} is not supported.')
-#     raise NotImplementedError(f'keys={keys} is not supported.')
+def _imshow_process(loader, filename, model, to_device, device, augmentation_transform, input_transform, show_transform, output_transform, save_to, all=False):
+    model.eval()
+    with torch.no_grad():
+        for i, batch in enumerate(loader):
+            if i == 5:
+                break
+            batch = to_device(batch, device)
+            batch = augmentation_transform(batch)
+            x, y = input_transform(batch)
+            pred = model(x)
+
+            pred, y, x = map(lambda x: x.cpu().detach().numpy(), show_transform(*output_transform((pred, y), is_eval=False), x))
+
+            cmaps = list(map(lambda image: 'gray' if image.shape[1] == 1 else None, [x, pred, y]))
+
+            fig, axs = plt.subplots(1, 3, figsize=(30, 10))
+            axs[0].imshow(x[0].transpose(1,2,0), cmap=cmaps[0])
+            axs[0].set_title('input')
+            axs[0].axis('off')
+            axs[1].imshow(pred[0].transpose(1,2,0), cmap=cmaps[1])
+            axs[1].set_title('pred')
+            axs[1].axis('off')
+            axs[2].imshow(y[0].transpose(1,2,0), cmap=cmaps[2])
+            axs[2].set_title('gt')
+            axs[2].axis('off')
+
+            if all:
+                fig.savefig(os.path.join(save_to, f'{filename}_{i}.png'))
+            else:
+                fig.savefig(os.path.join(save_to, f'{filename}.png'))
+                break
+
 # Data Processing Utilities end
 #########################
 
@@ -81,11 +95,11 @@ def train(
         train_dataset: Dataset,
         loss_fn: Callable,
         epochs: int,
+        val_dataset: Dataset = None,
         lr :float = 0.01,
+        batch_size: int = 8, 
         exp_name : str = 'task',
-        batch_size: int = 8,  
         exp_basedir : str = 'exp',
-        val_dataset: Dataset = None, 
         epoch_length: int = None,
         eval_length_train: int = None,
         eval_length_val: int = None,
@@ -93,20 +107,32 @@ def train(
         loader_num_workers: int = 8,
         augmentation_transform : Callable = lambda batch : batch,
         input_transform : Callable = lambda batch : (batch, batch),
-        output_transform : Callable = lambda output : (output[0], output[1]),
-        show_transform : Callable = lambda batch, pred, gt : (batch, pred, gt),
+        metric_transform : Callable = lambda x : x,
+        show_transform : Callable = lambda pred, gt, batch=None : (pred, gt) if batch is None else (pred, gt, batch),
+        global_metrics : dict = None,
         checkpoint_every_epoch : int = 10,
         maxnum_checkpoints : int = 10,
         validate_every_epoch : int = 1,
+        early_stopping_metric : str = 'ssim',
+        early_stopping_patience : int = 10,
+        early_stopping_min_delta : float = 1e-4,
         device : torch.device | str = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         to_device : Callable = _to_device,
-        tensorboard_basedir : str = '.tb_logs',
+        tb_basedir : str = '.tb_logs',
+        imshow_dataset: Dataset = None,
+        extra_info : dict = {},
         # continue_from : str = None, # Todo
         ):
-
+    
+    def output_transform(output, is_eval=True):
+        """Transform output to metric input."""
+        if is_eval:
+            return metric_transform(output[0]), metric_transform(output[1])
+        else:
+            return output[0], output[1]
 
     #########################
-    # parameter check begin
+    # parameters check begin
     if val_dataset is None:
         val_dataset = train_dataset
 
@@ -119,6 +145,18 @@ def train(
     if eval_length_val is None:
         eval_length_val = len(val_dataset)
 
+    if global_metrics is None:
+        global_metrics = {
+            "ssim": SSIM(1.0, output_transform = output_transform, device=device),
+            "psnr": PSNR(1.0, output_transform = output_transform, device=device),
+            "-loss": Loss(lambda x, y: -loss_fn(x, y), device=device)
+        }
+
+    def imshow_process(loader, filename, all=False):
+        _imshow_process(loader, filename, model, to_device, device, augmentation_transform, input_transform, show_transform, output_transform, save_to, all)
+
+    # parameters check end
+    #########################
 
 
     #########################
@@ -135,7 +173,7 @@ def train(
     LOG_PATH = os.path.join(save_to, f'{TASK_NAME}.log')
     ARGS_PATH = os.path.join(save_to, 'args.yaml')
     NETWORKARCH_PATH = os.path.join(save_to, 'model.torchinfo')
-    TENSORBOARD_LOG_PATH = os.path.join(tensorboard_basedir, UNINAME) if tensorboard_basedir is not None else None
+    TENSORBOARD_LOG_PATH = os.path.join(tb_basedir, UNINAME) if tb_basedir is not None else None
     TRAINHISTORY_PATH = os.path.join(save_to, 'train_history.csv')
     VALHISTORY_PATH = os.path.join(save_to, 'val_history.csv')
 
@@ -186,6 +224,9 @@ def train(
     # ignite tensorboard logger configuration end
     #########################
 
+
+    #########################
+    # Prepare torch components begin
     # Get device
     logger.debug(f'|||||Trainer now using device: {device}|||||')
     model.to(device)
@@ -195,35 +236,42 @@ def train(
     val_loader = DataLoader(val_dataset, num_workers=loader_num_workers, batch_size=batch_size, shuffle=True)
     logger.debug(f'Total samples: train_loader {len(train_loader)} , val_loader {len(val_loader)}')
 
-    # Prepare metrics
-    global_metrics = {
-        "ssim": SSIM(1.0, output_transform = output_transform, device=device),
-        "psnr": PSNR(1.0, output_transform = output_transform, device=device),
-        "loss": Loss(loss_fn, device=device)
-    }
+    # Prepare imshow loader
+    if imshow_dataset is not None:
+        imshow_loader = DataLoader(imshow_dataset, batch_size=1, shuffle=False)
+
+    # Optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr = lr)
+    
+    # Prepare torch components end
+    #########################
 
     #########################
     # Saving Experiment Configurations begin
     # Save args.yaml to file
-    args_profile = Profile(
-        profile={
-            TASK_NAME:{
-            'exp_name':exp_name,
-            'batch_size':batch_size,
-            'epoch':epochs,
-            'learning_rate':lr,
-            'device':str(device),
-            'save_to':save_to,
-            'loss_fn':loss_fn,
-            # 'model':model,
-            'train_dataset':train_dataset,
-            'val_dataset':val_dataset,
-            }
-        },
+    config = {
+        TASK_NAME:{
+        'exp_name':exp_name,
+        'batch_size':batch_size,
+        'epoch':epochs,
+        'learning_rate':lr,
+        'device':str(device),
+        'save_to':save_to,
+        'loss_fn':loss_fn,
+        # 'model':model,
+        # 'train_dataset':train_dataset,
+        # 'val_dataset':val_dataset,
+        }
+    }
+    config.update({
+        "extra_info": extra_info
+    })
+    config_profile = Profile(
+        profile=config,
         filter=DictFilter()
         )
-    args_profile.dump_to_file(save_to=ARGS_PATH)
-    logger.debug( '|-\n' + str(args_profile))
+    config_profile.dump_to_file(save_to=ARGS_PATH)
+    logger.debug( '|-\n' + str(config_profile))
 
     # If torchinfo is installed, save model.torchinfo to file
     try:
@@ -235,14 +283,19 @@ def train(
         # Save model.torchinfo to file
         summary = torchinfo.summary(
             model = model,
-            input_data=[input_transform(next(iter(train_loader)))[0]],
+            input_data=[input_transform(augmentation_transform(to_device(next(iter(train_loader)), device=device)))[0]],
             depth=6,
             device=device,
         )
         assert not os.path.exists(NETWORKARCH_PATH), f'{NETWORKARCH_PATH} already exists!'
-        with open(NETWORKARCH_PATH, 'w') as f:
+        with open(NETWORKARCH_PATH, 'w', encoding='utf-8') as f:
             f.write(str(summary))
         logger.debug( '|-\n' + str(summary))
+
+
+    # imshow before training
+    if imshow_dataset is not None:
+        imshow_process(imshow_loader, 'imshow_trainset_before', all=True)
 
     # # Save for_dump[keys] to file
     # if for_dump is not None:
@@ -254,19 +307,18 @@ def train(
     # Saving Experiment Configurations end
     #########################
 
+
+    #########################
+    # Main training steps begin 
     train_history = []
     val_history = []
 
-    #########################
-    # Main training steps begin
-    # Optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr = lr)
- 
     # Ignite configure
     trainer = create_supervised_trainer(model, optimizer, loss_fn, device)
 
     train_evaluator = create_supervised_evaluator(model, metrics=global_metrics, device=device)
     val_evaluator = create_supervised_evaluator(model, metrics=global_metrics, device=device)
+        
 
     def train_step(engine, batch):
         """Train step."""
@@ -317,7 +369,7 @@ def train(
         metric.attach(val_evaluator, name)
 
 
-    @trainer.on(Events.EPOCH_COMPLETED)
+    @trainer.on(Events.EPOCH_COMPLETED(every=validate_every_epoch))
     def log_training_results(trainer):
         """Log training results."""
         train_evaluator.run(train_loader, epoch_length=eval_length_train)
@@ -350,9 +402,22 @@ def train(
                 metric_names="all",
                 global_step_transform=global_step_from_engine(trainer),
             )
+    
+    # tb show image
+    if TENSORBOARD_LOG_PATH is not None and imshow_dataset is not None:
+        tb_imshow_evaluator = Engine(validation_step)
 
+        @trainer.on(Events.EPOCH_COMPLETED(every=validate_every_epoch))
+        def tb_evaluator_run(trainer):
+            tb_imshow_evaluator.run(imshow_loader)
 
-    # checkpoint
+        @tb_imshow_evaluator.on(Events.ITERATION_COMPLETED)
+        def tb_imshow_log(engine):
+            pred, _ = show_transform(*output_transform(engine.state.output, is_eval = False)) # B C H W
+            global_step = trainer.state.epoch
+            tb_logger.writer.add_image(f'pred_{engine.state.iteration}', pred[0], global_step, dataformats='CHW')
+
+    # checkpoint    
     _to_save_dict = {'model': model, 'optimizer': optimizer}
 
     every_n_checkpointer = Checkpoint(
@@ -363,63 +428,40 @@ def train(
         global_step_transform=global_step_from_engine(trainer),
     )
 
-    best_loss_checkpointer = Checkpoint(
-        to_save=_to_save_dict,
-        save_handler=DiskSaver(save_to,create_dir=True, require_empty=False),
-        filename_prefix='best',
-        n_saved=1,
-        score_name='-loss',
-        score_function=lambda engine: -engine.state.metrics['loss'],
-        global_step_transform=global_step_from_engine(trainer),
-    )
-
-    best_ssim_checkpointer = Checkpoint(
-        to_save=_to_save_dict,
-        save_handler=DiskSaver(save_to,create_dir=True, require_empty=False),
-        filename_prefix='best',
-        n_saved=1,
-        score_name='ssim',
-        score_function=lambda engine: engine.state.metrics['ssim'],
-        global_step_transform=global_step_from_engine(trainer),
-    )
+    metrics_checkpointers = [
+        Checkpoint(
+            to_save=_to_save_dict,
+            save_handler=DiskSaver(save_to,create_dir=True, require_empty=False),
+            filename_prefix=f'best',
+            n_saved=1,
+            score_name=metric_name,
+            score_function=lambda engine: engine.state.metrics[metric_name],
+            global_step_transform=global_step_from_engine(trainer),
+        )
+        for metric_name in global_metrics.keys()
+    ]
     
     trainer.add_event_handler(Events.EPOCH_COMPLETED(every=checkpoint_every_epoch), every_n_checkpointer)
-    val_evaluator.add_event_handler(Events.EPOCH_COMPLETED, best_loss_checkpointer)
-    val_evaluator.add_event_handler(Events.EPOCH_COMPLETED, best_ssim_checkpointer)
-        
-    # best_score = None
-    # @trainer.on(Events.EPOCH_COMPLETED(every=checkpoint_every_epoch))
-    # def save_model(trainer):
-    #     """Save model."""
-    #     epoch = trainer.state.epoch
-    #     model_state_dict = model.state_dict()
-    #     optimizer_state_dict = optimizer.state_dict()
-    #     metrics = train_evaluator.state.metrics
-    #     path = os.path.join(save_to,f'epoch{epoch}.checkpoint')
+    for metrics_checkpoint in metrics_checkpointers:
+        val_evaluator.add_event_handler(Events.EPOCH_COMPLETED, metrics_checkpoint)
 
-    #     savepoint = {
-    #         'epoch': epoch,
-    #         'model_state_dict': model_state_dict,
-    #         'optimizer_state_dict': optimizer_state_dict,
-    #         'loss': metrics['loss'],
-    #         }
-
-    #     torch.save(savepoint, path)
-    #     # Update last
-    #     path = os.path.join(save_to,f'last.model')
-    #     torch.save(savepoint, path)
-        
-    #     # Update best
-    #     nonlocal best_score
-    #     if best_score == None or best_score['loss'] > metrics['loss']:
-    #         best_score = savepoint
-    #         path = os.path.join(save_to, f'best.model')
-    #         torch.save(best_score, path)
-        
+    # early stopping
+    if early_stopping_metric is not None and early_stopping_patience is not None and early_stopping_min_delta is not None and early_stopping_metric in global_metrics.keys():
+        val_evaluator.add_event_handler(
+            Events.EPOCH_COMPLETED,
+            EarlyStopping(
+                patience=early_stopping_patience,
+                score_function=lambda engine: engine.state.metrics[early_stopping_metric],
+                trainer=trainer,
+                min_delta=early_stopping_min_delta,
+            )
+        )
+    else:
+        logger.warning('Early stopping is not enabled.')        
     # Main training steps end
     #########################
 
-    # Trian
+    # Training
     trainer.run(train_loader, max_epochs=epochs, epoch_length=epoch_length)
     logger.info(f'Training finished. Time cost: {get_time_diff(start_time, datetime.now())}')
 
@@ -443,31 +485,14 @@ def train(
     fig.savefig(os.path.join(save_to, 'loss_curve.png'))
 
     # Testcase
-    train_loader_shown = DataLoader(train_dataset, num_workers=loader_num_workers, batch_size=1, shuffle=True)
-    val_loader_shown = DataLoader(val_dataset, num_workers=loader_num_workers, batch_size=1, shuffle=True)
+    train_loader_shown = DataLoader(train_dataset, batch_size=1, shuffle=False)
+    val_loader_shown = DataLoader(val_dataset, batch_size=1, shuffle=False)
 
-    model.eval()
-    with torch.no_grad():
-        batch = next(iter(train_loader_shown))
-        batch = to_device(batch, device)
-        batch = augmentation_transform(batch)
-        x, y = input_transform(batch)
-        pred = model(x)
 
-        x, pred, y = map(lambda x: x.cpu().detach().numpy(), show_transform(x, pred, y))
-
-        fig, axs = plt.subplots(1, 3, figsize=(30, 10))
-        axs[0].imshow(x[0].transpose(1,2,0))
-        axs[0].set_title('input')
-        axs[0].axis('off')
-        axs[1].imshow(pred[0].transpose(1,2,0))
-        axs[1].set_title('pred')
-        axs[0].axis('off')
-        axs[2].imshow(y[0].transpose(1,2,0))
-        axs[2].set_title('gt')
-        axs[0].axis('off')
-
-        fig.savefig(os.path.join(save_to, 'testcase.png'))
+    imshow_process(train_loader_shown, 'testcase_trainset', all=False)
+    imshow_process(val_loader_shown, 'testcase_valset', all=False)
+    if imshow_dataset is not None:
+        _imshow_process(imshow_loader, 'testcase_tb', all=True)
     # Training results and evaluations end
     #########################
 

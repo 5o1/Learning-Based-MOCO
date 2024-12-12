@@ -47,7 +47,7 @@ class DictFilter:
 
     def __call__(self, data):
         if not isinstance(data, dict):
-            raise TypeError("Input data should be a dict.")
+            raise TypeError(f"Input data should be a dict, but got {type(data)}")
         return self.dictfilter(data)
 
 
