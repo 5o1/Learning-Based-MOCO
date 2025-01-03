@@ -32,8 +32,11 @@ def _viewx(x: torch.Tensor, view: None | Literal['abs'] = None):
     else:
         raise NotImplementedError
 
-def normalize(x : torch.Tensor, view: None | Literal['abs'] = None, mode: Literal['meanstd','minmax'] = 'meanstd'):
+def normalize(x : torch.Tensor, view: None | Literal['abs'] = None, mode: Literal['meanstd','minmax'] = 'meanstd', requires_ps: bool = False):
     x1 = _viewx(x, view)
     miu,sigma = _get_statistics(x1, mode)
     x = (x - miu) / sigma
-    return x
+    if requires_ps:
+        return x, miu, sigma
+    else:
+        return x

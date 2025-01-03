@@ -20,7 +20,7 @@ class Phantom(Dataset):
         sample = shepp_logan_phantom()
         sample = resize(sample, self.image_size, anti_aliasing=True)
         sample = torch.tensor(sample).float().view(1, *self.image_size)
-        sample = (sample - sample.mean()) / sample.std()
+        # sample = (sample - sample.mean()) / sample.std()
 
         if self.transforms is not None:
             sample = self.transforms(sample)

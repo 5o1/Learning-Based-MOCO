@@ -1,12 +1,8 @@
-import bottleneck
-from sympy import im, re
 import torch.nn as nn
 import torch
 from torchvision import transforms as tf
 
 from . import mynn as mynn
-
-import copy
 
 
 class nConv2d(nn.Module):
@@ -229,7 +225,7 @@ class Up(nn.Module):
 
 class UNet(nn.Module):
 
-    def __init__(self, in_channels : int = 4 , out_channels : int = 4 , depth : int = 4, top_channels : int = 64, dtype = torch.float32, crop_res : bool = False, norm_layer: nn.Module = None, act_layer: nn.Module = nn.ReLU, upsample_layer = None, downsample_layer = None) -> None:
+    def __init__(self, in_channels : int = 4 , out_channels : int = 4 , depth : int = 4, top_channels : int = 64, dtype = torch.float32, crop_res : bool = False, norm_layer: nn.Module = None, act_layer: nn.Module = nn.ReLU, upsample_layer = None, downsample_layer = None, debug = False) -> None:
         super().__init__()
 
         if crop_res:
@@ -246,6 +242,8 @@ class UNet(nn.Module):
         self.act_layer = act_layer
         self.upsample_layer = upsample_layer
         self.downsample_layer = downsample_layer
+
+        self.debug = debug
 
         # if self.crop_res:
         #     self._pad = AdaptedPad(depth)
@@ -282,9 +280,10 @@ class UNet(nn.Module):
 
     def forward(self, x: torch.Tensor):
         """[pad] -> in -> down -> bottom -> up -> -> [crop] -> out"""
-        # check nan, inf
-        x = self._checknan(x, 'in')
-        x = self._checkinf(x, 'in')
+        if self.debug:
+            # check nan, inf
+            x = self._checknan(x, 'in')
+            x = self._checkinf(x, 'in')
         # pad
         if self.crop_res:
             x = self._pad(x)
@@ -312,7 +311,8 @@ class UNet(nn.Module):
             x = self._pad.crop(x)
         # out
         x = self._out(x)
-        # check nan, inf
-        x = self._checknan(x, 'out')
-        x = self._checkinf(x, 'out')
+        if self.debug:
+            # check nan, inf
+            x = self._checknan(x, 'out')
+            x = self._checkinf(x, 'out')
         return x

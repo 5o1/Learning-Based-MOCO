@@ -4,6 +4,11 @@ import math
 from typing import List
 from einops import rearrange, repeat, pack, unpack
 
+from einops.layers.torch import Rearrange
+
+from . import mynn as mynn
+from .mynn import functional as myf
+
 class SinusoidalPositionEncoding1d(nn.Module):
     """Sinusoidal Position Encoding for 1-dimensions"""
     def __init__(self, d_model, pos_scale=1e2):
@@ -92,13 +97,6 @@ class LearnablePositionEncoding(nn.Module):
     def forward(self, tensor):
         return tensor + self._pe[:tensor.size(0), :]
 
-
-
-import torch
-from torch import nn
-
-from einops import rearrange, repeat, pack, unpack
-from einops.layers.torch import Rearrange
 
 class FeedForward(nn.Module):
     def __init__(self, dim, hidden_dim, dropout = 0.):
@@ -207,9 +205,6 @@ class ViT(nn.Module):
 
         return self.mlp_head(cls_tokens)
     
-
-import mynn as mynn
-from mynn import functional as myf
 
 class MAE_Kradial(nn.Module):
     def __init__(self, 

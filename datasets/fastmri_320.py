@@ -4,39 +4,51 @@ from torch.utils.data import Dataset
 from random import shuffle
 import numpy as np
 
+import time
+
 import os
+import uuid
+
+def generate_random_uuid():
+    return str(uuid.uuid4())
 
 # ismrmrd_header rss csm kspace
 class Fastmri_320p(Dataset):
-    def __init__(self, filelist, num_subset = None, transform=None, lazy_memory=True, output_keys=["kspace"], output_type = dict, disk_cache = False):
+    def __init__(self, filelist, num_subset = None, transform=None, memory_pin = None, disk_cache = False, debug = False, no_slices : list = ['ismrmrd_header']):
+        """
+        Note:   
+        memory_pin must be None while it works with torch dataloader num_workers > 0.
+        """
         super(Fastmri_320p, self).__init__()
         self.filelist = filelist
         self.num_subset = num_subset
         self.transform = transform
-        self.lazy_cache = lazy_memory
-        self.output_keys = output_keys
-        self.output_type = output_type
+        self.memory_pin = memory_pin
         self.disk_cache = disk_cache
+        self.debug = debug
+        self.no_slices = no_slices
 
-        self.extension_disk_cache = "._cached"
+        self.extension_disk_cache = f".{self.disk_cache}._cached" if self.disk_cache and isinstance(self.disk_cache, str) else "._cached"
 
         if self.num_subset is not None:
             self.filelist = self.filelist[:self.num_subset]
 
-        self._cache = {}
-        self._keys = ["kspace", "csm", "rss"]
+        self._cache = {} if memory_pin is not None else None
 
-        if not lazy_memory:
-            try:
-                for file in filelist:
-                    path, index = file
-                    if path not in self._cache:
-                        self.load(path)
-            except MemoryError as e: # The total size of the dataset is about 400GB
-                print("Memory Error in preloading the dataset.", e)
-                print("Lazy memory is recommended. Automatically switch to lazy memory.")
-                self.release(ratio=0.75)
-                self.lazy_cache = True
+        if memory_pin is not None:
+            if memory_pin == "whole": # try to load all the data into memory
+                try:
+                    for file in filelist:
+                        path, index = file
+                        if path not in self._cache:
+                            self.load_warm(path)
+                except MemoryError as e: # The total size of the dataset is about 400GB
+                    print("Memory Error in preloading the dataset.", e)
+                    print("Lazy memory is recommended. Automatically switch to lazy memory.")
+                    self.release(ratio=0.75)
+                    self.memory_pin = "lazy" # switch to lazy memory
+            elif memory_pin == "lazy":
+                pass 
 
     def mnemonic_disk_cache(self, path):
         """
@@ -48,31 +60,115 @@ class Fastmri_320p(Dataset):
         """
         Clean the disk cache files.
         """
-        print("WARNING: This will remove all disk cache files with the extension '._cached'.")
+        if self.disk_cache and isinstance(self.disk_cache, str):
+            print(f"WARNING: This operation will remove all disk cache files with the extension '.{self.disk_cache}._cached' in the filelist.")
+        else:
+            print(f"WARNING: This operation will remove all disk cache files with the extension '._cached' in the filelist.")
         for path, idx in self.filelist:
             cache_path = self.mnemonic_disk_cache(path)
             if os.path.exists(cache_path):
                 os.remove(cache_path)
 
-    def load(self, path):
+    def load_cold(self, path):
         """
-        Load the data from the file path.
+        Load the data (or cache) directly from the disk without memory cache.
+        """
+        cache_path = self.mnemonic_disk_cache(path)
+
+        if self.disk_cache:
+            if os.path.exists(cache_path):
+                _begin_time = time.time()
+                try:
+                    data = torch.load(cache_path, weights_only =False)
+                except Exception as e:
+                    print(f"Error in loading the cache {cache_path} without memory_pin.", e)
+                    raise e
+                if self.debug:
+                    print(f'loading the cache {cache_path} without memory_pin, cost: {time.time() - _begin_time}')
+                return data
+            
+        _begin_time = time.time()
+        with np.load(path, 'r') as data:
+            data = self.transform(data)
+
+            if self.debug:
+                print(f'loading the data {path} without memory_pin, cost: {time.time() - _begin_time}')
+
+            if self.disk_cache:
+                _begin_time = time.time()
+                _tmp_path = cache_path + "." + generate_random_uuid() + ".tmp"
+                torch.save(data, _tmp_path, _use_new_zipfile_serialization=False)
+                if os.path.exists(cache_path): # in order to avoid two processes writing the same file
+                    os.remove(_tmp_path)
+                    if self.debug:
+                        print(f"Warning: The cache file {cache_path} already exists. The temporary file {_tmp_path} is removed.")
+                else:
+                    os.rename(_tmp_path, cache_path)
+                if self.debug:
+                    print(f'saving the cache {cache_path} without memory_pin, cost: {time.time() - _begin_time}')
+
+            return data
+
+    def load_warm(self, path):
+        """
+        Load the data from the file path while caching the data in memory.
+        Note: This function will cause Out of Memory Error if it works with torch dataloader num_workers > 0.
         """
         cache_path = self.mnemonic_disk_cache(path)
 
         if self.disk_cache: # load from disk cache
             if os.path.exists(cache_path):
-                self._cache[path] = torch.load(cache_path)
-                return
+                _begin_time = time.time()
+                try:
+                    self._cache[path] = torch.load(cache_path, weights_only =False)
+                except Exception as e:
+                    print(f"Error in loading the cache {cache_path}.", e)
+                    raise e
+                if self.debug:
+                    print(f'loading the cache {cache_path} cost: {time.time() - _begin_time}')
+                return self._cache[path]
 
-        with np.load(path) as data:
-            self._cache[path] = {key: torch.tensor(data[key]) for key in self._keys}
-            self._cache[path].update(self.transform(self._cache[path]))
-            for key in [key for key in self._cache[path] if key not in self.output_keys]:
-                del self._cache[path][key]
+        _begin_time = time.time()
+        with np.load(path, 'r') as data:
+            self._cache[path] = self.transform(data)
+
+            if self.debug:
+                print(f'loading the data {path} cost: {time.time() - _begin_time}')
 
             if self.disk_cache: # dump to disk cache
-                torch.save(self._cache[path], cache_path)
+                _begin_time = time.time()
+                _tmp_path = cache_path + "." + generate_random_uuid() + ".tmp"
+                torch.save(self._cache[path], _tmp_path, _use_new_zipfile_serialization=False)
+                if os.path.exists(cache_path): # in order to avoid two processes writing the same file
+                    os.remove(_tmp_path)
+                    if self.debug:
+                        print(f"Warning: The cache file {cache_path} already exists. The temporary file {_tmp_path} is removed.")
+                else:
+                    os.rename(_tmp_path, cache_path)
+                if self.debug:
+                    print(f'saving the cache {cache_path} cost: {time.time() - _begin_time}')
+
+            return self._cache[path]
+        
+    def load(self, path):
+        """
+        Load the data from the file path.
+        """
+        if self.memory_pin is None:
+            return self.load_cold(path)
+        elif self.memory_pin == "whole" or self.memory_pin == "lazy":
+            if path in self._cache:
+                return self._cache[path]
+            else:
+                try:
+                    data = self.load_warm(path)
+                except MemoryError as e:
+                    self.release()
+                    data = self.load_warm(path)
+                return data
+        else:
+            raise ValueError("The memory_pin must be None, 'whole' or 'lazy'.")
+
 
     def release(self, ratio = 0.5):
         """
@@ -89,15 +185,5 @@ class Fastmri_320p(Dataset):
 
     def __getitem__(self, idx):
         path, index = self.filelist[idx]
-
-        if path not in self._cache:
-            try:
-                self.load(path)
-            except MemoryError as e:
-                self.release()
-                self.load(path) # try again
-
-        if self.output_type == dict:
-            return {key: self._cache[path][key][index] for key in self.output_keys}
-        elif self.output_type == list:
-            return [self._cache[path][key][index] for key in self.output_keys]
+        data = self.load(path)
+        return {key: value[index] if key not in self.no_slices else value for key, value in data.items()}

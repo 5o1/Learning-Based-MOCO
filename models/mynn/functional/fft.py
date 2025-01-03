@@ -6,11 +6,11 @@ from typing import List
 
 
 def itok(tensor: torch.Tensor, dim : List[int] = [-2,-1]) -> torch.Tensor:
-    return ifftshift(fftn(fftshift(tensor, dim = dim), dim = dim), dim = dim)
+    return fftshift(fftn(ifftshift(tensor, dim = dim), dim = dim), dim = dim)
 
 fft = itok
 
 def ktoi(tensor: torch.Tensor, dim : List[int] = [-2,-1]) -> torch.Tensor:
-    return ifftshift(ifftn(fftshift(tensor, dim = dim), dim = dim), dim = dim)
+    return fftshift(ifftn(ifftshift(tensor, dim = dim), dim = dim), dim = dim)
 
 ifft = ktoi
